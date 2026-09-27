@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qiangpiao.mapper.SeckillRecordMapper">
+
+    <insert id="insertIgnore" parameterType="com.qiangpiao.dataobject.SeckillRecordDO">
+        INSERT IGNORE INTO t_seckill_record (train_id, seat_type, user_id, order_no, create_time)
+        VALUES (#{trainId}, #{seatType}, #{userId}, #{orderNo}, NOW())
+    </insert>
+
+    <select id="selectByUserAndTrain" resultType="com.qiangpiao.dataobject.SeckillRecordDO">
+        SELECT id, train_id, seat_type, user_id, order_no, create_time
+        FROM t_seckill_record
+        WHERE train_id = #{trainId}
+          AND seat_type = #{seatType}
+          AND user_id = #{userId}
+        LIMIT 1
+    </select>
+
+    <delete id="deleteByOrderNo">
+        DELETE FROM t_seckill_record WHERE order_no = #{orderNo}
+    </delete>
+</mapper>

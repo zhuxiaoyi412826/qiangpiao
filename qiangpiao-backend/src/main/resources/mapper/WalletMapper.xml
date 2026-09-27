@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qiangpiao.mapper.WalletMapper">
+
+    <sql id="Base_Column_List">
+        id, user_id, balance, total_recharge, total_consume, version, create_time, update_time
+    </sql>
+
+    <select id="selectByUserId" resultType="com.qiangpiao.dataobject.WalletDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_wallet
+        WHERE user_id = #{userId}
+        LIMIT 1
+    </select>
+
+    <insert id="insertIgnore">
+        INSERT IGNORE INTO t_wallet (user_id, balance, total_recharge, total_consume, version, create_time,
+                                     update_time)
+        VALUES (#{userId}, 0, 0, 0, 0, NOW(), NOW())
+    </insert>
+
+    <update id="increaseBalance">
+        UPDATE t_wallet
+        SET balance        = balance + #{amount},
+            total_recharge = total_recharge + #{amount},
+            version        = version + 1
+        WHERE user_id = #{userId}
+    </update>
+
+    <update id="decreaseBalance">
+        UPDATE t_wallet
+        SET balance       = balance - #{amount},
+            total_consume = total_consume + #{amount},
+            version       = version + 1
+        WHERE user_id = #{userId}
+          AND version = #{version}
+          AND balance &gt;= #{amount}
+    </update>
+</mapper>

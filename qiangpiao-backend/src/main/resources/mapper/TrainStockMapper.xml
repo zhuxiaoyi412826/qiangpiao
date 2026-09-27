@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qiangpiao.mapper.TrainStockMapper">
+
+    <sql id="Base_Column_List">
+        id, train_id, seat_type, total_count, available_count, price, version, create_time, update_time
+    </sql>
+
+    <select id="selectById" resultType="com.qiangpiao.dataobject.TrainStockDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_train_stock
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectByTrainAndType" resultType="com.qiangpiao.dataobject.TrainStockDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_train_stock
+        WHERE train_id = #{trainId}
+          AND seat_type = #{seatType}
+        LIMIT 1
+    </select>
+
+    <select id="selectByTrainId" resultType="com.qiangpiao.dataobject.TrainStockDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_train_stock
+        WHERE train_id = #{trainId}
+        ORDER BY seat_type
+    </select>
+
+    <!-- 乐观锁扣减：CAS 保证不超卖 -->
+    <update id="decreaseStock">
+        UPDATE t_train_stock
+        SET available_count = available_count - 1,
+            version = version + 1
+        WHERE id = #{id}
+          AND version = #{version}
+          AND available_count > 0
+    </update>
+
+    <update id="increaseStock">
+        UPDATE t_train_stock
+        SET available_count = available_count + 1,
+            version = version + 1
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateById" parameterType="com.qiangpiao.dataobject.TrainStockDO">
+        UPDATE t_train_stock
+        SET available_count = #{availableCount},
+            total_count = #{totalCount},
+            price = #{price}
+        WHERE id = #{id}
+    </update>
+
+    <insert id="insert" parameterType="com.qiangpiao.dataobject.TrainStockDO"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_train_stock (train_id, seat_type, total_count, available_count, price, version, create_time,
+                                   update_time)
+        VALUES (#{trainId}, #{seatType}, #{totalCount}, #{availableCount}, #{price}, 0, NOW(), NOW())
+    </insert>
+</mapper>

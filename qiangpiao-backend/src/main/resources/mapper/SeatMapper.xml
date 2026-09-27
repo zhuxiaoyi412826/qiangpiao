@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qiangpiao.mapper.SeatMapper">
+
+    <sql id="Base_Column_List">
+        id, train_id, seat_type, carriage_no, seat_no, status, order_no, version, create_time, update_time
+    </sql>
+
+    <select id="selectById" resultType="com.qiangpiao.dataobject.SeatDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_seat
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectAvailableOne" resultType="com.qiangpiao.dataobject.SeatDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_seat
+        WHERE train_id = #{trainId}
+          AND seat_type = #{seatType}
+          AND status = 0
+        ORDER BY carriage_no, seat_no
+        LIMIT 1
+    </select>
+
+    <select id="selectByTrainId" resultType="com.qiangpiao.dataobject.SeatDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_seat
+        WHERE train_id = #{trainId}
+        ORDER BY seat_type, carriage_no, seat_no
+    </select>
+
+    <select id="selectByTrainAndType" resultType="com.qiangpiao.dataobject.SeatDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_seat
+        WHERE train_id = #{trainId}
+          AND seat_type = #{seatType}
+        ORDER BY carriage_no, seat_no
+    </select>
+
+    <!-- 抢占座位：条件 status=0 保证并发下只有一个线程成功 -->
+    <update id="lockSeat">
+        UPDATE t_seat
+        SET status = 1,
+            order_no = #{orderNo},
+            version = version + 1
+        WHERE id = #{id}
+          AND version = #{version}
+          AND status = 0
+    </update>
+
+    <update id="lockSeatById">
+        UPDATE t_seat
+        SET status = 1,
+            order_no = #{orderNo},
+            version = version + 1
+        WHERE id = #{id}
+          AND status = 0
+    </update>
+
+    <update id="releaseSeatByOrderNo">
+        UPDATE t_seat
+        SET status = 0,
+            order_no = NULL,
+            version = version + 1
+        WHERE order_no = #{orderNo}
+    </update>
+
+    <select id="countAvailable" resultType="int">
+        SELECT COUNT(1)
+        FROM t_seat
+        WHERE train_id = #{trainId}
+          AND seat_type = #{seatType}
+          AND status = 0
+    </select>
+
+    <insert id="insertBatch">
+        INSERT INTO t_seat (train_id, seat_type, carriage_no, seat_no, status, version, create_time, update_time)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.trainId}, #{item.seatType}, #{item.carriageNo}, #{item.seatNo}, 0, 0, NOW(), NOW())
+        </foreach>
+    </insert>
+</mapper>

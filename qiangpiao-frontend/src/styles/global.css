@@ -1,0 +1,77 @@
+* {
+    box-sizing: border-box;
+}
+
+html, body, #app {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #f5f7fa;
+    color: #303133;
+}
+
+.page-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px 16px 40px;
+}
+
+.card-panel {
+    background: #fff;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .04);
+}
+
+.train-no {
+    font-size: 18px;
+    font-weight: 600;
+    color: #1a73e8;
+}
+
+.muted {
+    color: #909399;
+    font-size: 13px;
+}
+
+.price {
+    color: #f56c6c;
+    font-weight: 600;
+}
+
+/* 座位图 */
+.seat-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 46px);
+    gap: 8px;
+}
+
+.seat-item {
+    height: 40px;
+    line-height: 40px;
+    text-align: center;
+    border-radius: 6px;
+    border: 1px solid #dcdfe6;
+    cursor: pointer;
+    font-size: 12px;
+    user-select: none;
+}
+
+.seat-item.available {
+    background: #ecf5ff;
+    color: #409eff;
+}
+
+.seat-item.sold {
+    background: #f4f4f5;
+    color: #c0c4cc;
+    cursor: not-allowed;
+}
+
+.seat-item.selected {
+    background: #409eff;
+    color: #fff;
+    border-color: #409eff;
+}

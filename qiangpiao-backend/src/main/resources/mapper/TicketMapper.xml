@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qiangpiao.mapper.TicketMapper">
+
+    <sql id="Ticket_Column_List">
+        o.id, o.order_no, o.train_id, o.seat_type, o.carriage_no, o.seat_no, o.passenger_name, o.id_card,
+        o.price, o.status, o.depart_date, o.create_time, o.pay_time, o.expire_time,
+        t.train_no, t.train_type, t.from_station_name, t.to_station_name,
+        t.depart_time, t.arrive_time, t.duration_minutes
+    </sql>
+
+    <!-- 发车时刻表达式：订单快照的乘车日期 + 车次发车时刻 -->
+    <sql id="Depart_At">TIMESTAMP(o.depart_date, t.depart_time)</sql>
+
+    <sql id="Ticket_Where">
+        o.user_id = #{userId}
+        <choose>
+            <when test="history">
+                AND ((o.status = 1 AND
+                <include refid="Depart_At"/> &lt;= NOW())
+                OR o.status IN (2, 3, 4))
+            </when>
+            <otherwise>
+                AND o.status = 1
+                AND
+                <include refid="Depart_At"/> &gt; NOW()
+            </otherwise>
+        </choose>
+    </sql>
+
+    <select id="selectTickets" resultType="com.qiangpiao.dataobject.TicketDO">
+        SELECT
+        <include refid="Ticket_Column_List"/>
+        FROM t_order o
+        INNER JOIN t_train t ON t.id = o.train_id
+        WHERE
+        <include refid="Ticket_Where"/>
+        ORDER BY
+        <choose>
+            <when test="history">
+                <include refid="Depart_At"/>
+                DESC, o.id DESC
+            </when>
+            <otherwise>
+                <include refid="Depart_At"/>
+                ASC, o.id ASC
+            </otherwise>
+        </choose>
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countTickets" resultType="long">
+        SELECT COUNT(1)
+        FROM t_order o
+        INNER JOIN t_train t ON t.id = o.train_id
+        WHERE
+        <include refid="Ticket_Where"/>
+    </select>
+</mapper>

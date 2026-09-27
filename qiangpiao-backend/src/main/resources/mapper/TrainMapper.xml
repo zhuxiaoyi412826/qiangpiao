@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qiangpiao.mapper.TrainMapper">
+
+    <sql id="Base_Column_List">
+        id, train_no, train_type, from_station_id, from_station_name, to_station_id, to_station_name,
+        depart_date, depart_time, arrive_time, duration_minutes, status, create_time, update_time
+    </sql>
+
+    <select id="selectById" resultType="com.qiangpiao.dataobject.TrainDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_train
+        WHERE id = #{id}
+    </select>
+
+    <select id="selectByRoute" resultType="com.qiangpiao.dataobject.TrainDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_train
+        WHERE status = 1
+        <if test="fromStation != null and fromStation != ''">
+            AND from_station_name = #{fromStation}
+        </if>
+        <if test="toStation != null and toStation != ''">
+            AND to_station_name = #{toStation}
+        </if>
+        <if test="departDate != null">
+            AND depart_date = #{departDate}
+        </if>
+        <!-- 只查未发车的车次：今天且发车时刻未到，或发车日期在今天之后 -->
+        AND (
+        <include refid="Not_Departed_Condition"/>
+        )
+        ORDER BY depart_time
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <sql id="Not_Departed_Condition">
+        depart_date &gt; CURDATE() OR (depart_date = CURDATE() AND depart_time &gt; NOW())
+    </sql>
+
+    <select id="countByRoute" resultType="long">
+        SELECT COUNT(1)
+        FROM t_train
+        WHERE status = 1
+        <if test="fromStation != null and fromStation != ''">
+            AND from_station_name = #{fromStation}
+        </if>
+        <if test="toStation != null and toStation != ''">
+            AND to_station_name = #{toStation}
+        </if>
+        <if test="departDate != null">
+            AND depart_date = #{departDate}
+        </if>
+        AND (
+        <include refid="Not_Departed_Condition"/>
+        )
+    </select>
+
+    <select id="selectAll" resultType="com.qiangpiao.dataobject.TrainDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_train
+        WHERE status = 1
+        ORDER BY depart_date, depart_time
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countAll" resultType="long">
+        SELECT COUNT(1) FROM t_train WHERE status = 1
+    </select>
+
+    <!--
+      车次日期滚动（每天发车）：把已发车的车次挪到它的下一班次——
+      今天该时刻还没过就保持在今天，否则顺延到明天，保证任何时刻都能查到未发车的车次。
+    -->
+    <update id="rollExpiredTrains">
+        UPDATE t_train
+        SET depart_date = CASE
+        WHEN TIMESTAMP(CURDATE(), depart_time) &gt; NOW() THEN CURDATE()
+        ELSE DATE_ADD(CURDATE(), INTERVAL 1 DAY)
+        END,
+        update_time = NOW()
+        WHERE TIMESTAMP(depart_date, depart_time) &lt;= NOW()
+    </update>
+
+    <insert id="insert" parameterType="com.qiangpiao.dataobject.TrainDO"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_train (train_no, train_type, from_station_id, from_station_name, to_station_id, to_station_name,
+                             depart_date, depart_time, arrive_time, duration_minutes, status, create_time, update_time)
+        VALUES (#{trainNo}, #{trainType}, #{fromStationId}, #{fromStationName}, #{toStationId}, #{toStationName},
+                #{departDate}, #{departTime}, #{arriveTime}, #{durationMinutes}, #{status}, NOW(), NOW())
+    </insert>
+</mapper>
