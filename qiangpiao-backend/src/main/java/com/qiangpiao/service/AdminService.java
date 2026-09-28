@@ -107,8 +107,12 @@ public interface AdminService {
 
     // ==================== 监控 / 报表 ====================
 
-    /** 余票监控：各车次各席别剩余座位 */
-    List<Map<String, Object>> stockMonitor();
+    /**
+     * 余票监控：各车次各席别剩余座位（分页，避免一次性拉全表）。
+     *
+     * @param trainNo 车次号模糊筛选，可为空
+     */
+    PageResult<Map<String, Object>> stockMonitor(Integer pageNum, Integer pageSize, String trainNo);
 
     /** 锁票管理：下单后临时锁定、超时自动释放的座位 */
     List<SeatDO> lockedSeats(Integer limit);

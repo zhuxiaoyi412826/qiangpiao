@@ -331,8 +331,12 @@ public class AdminServiceImpl implements AdminService {
     // ==================== 监控 / 报表 ====================
 
     @Override
-    public List<Map<String, Object>> stockMonitor() {
-        return adminMapper.stockMonitor();
+    public PageResult<Map<String, Object>> stockMonitor(Integer pageNum, Integer pageSize, String trainNo) {
+        int page = pageNum == null || pageNum < 1 ? 1 : pageNum;
+        int size = pageSize == null || pageSize < 1 ? 20 : Math.min(pageSize, 100);
+        List<Map<String, Object>> list = adminMapper.stockMonitor(trainNo, (long) (page - 1) * size, (long) size);
+        long total = adminMapper.countStockMonitor(trainNo);
+        return PageResult.of(page, size, total, list == null ? Collections.emptyList() : list);
     }
 
     @Override

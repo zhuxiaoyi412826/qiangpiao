@@ -22,4 +22,8 @@ public class PayDTO implements Serializable {
 
     @ApiModelProperty(value = "支付方式：ALIPAY / WECHAT / BALANCE", example = "ALIPAY")
     private String payType = "ALIPAY";
+
+    @ApiModelProperty(value = "幂等键：同一键只生成一笔支付单，重复点击 / 重试不会重复扣款。"
+            + "不传默认为 订单号 + 支付方式", example = "QP2026092812000000012345:ALIPAY")
+    private String idempotentKey;
 }

@@ -14,18 +14,20 @@ import com.qiangpiao.dataobject.OrderDO;
 import com.qiangpiao.dataobject.SeckillRecordDO;
 import com.qiangpiao.dataobject.TrainStockDO;
 import com.qiangpiao.dto.OrderQueryDTO;
+import com.qiangpiao.dto.PayDTO;
 import com.qiangpiao.dataobject.OrderLogDO;
 import com.qiangpiao.mapper.AdminMapper;
 import com.qiangpiao.mapper.OrderMapper;
 import com.qiangpiao.mapper.SeckillRecordMapper;
+import com.qiangpiao.service.PaymentService;
 import com.qiangpiao.service.PurchaseLimitService;
 import com.qiangpiao.mapper.TrainStockMapper;
 import com.qiangpiao.service.OrderService;
 import com.qiangpiao.service.SeatService;
 import com.qiangpiao.service.TrainService;
-import com.qiangpiao.service.WalletService;
 import com.qiangpiao.vo.OrderDetailVO;
 import com.qiangpiao.vo.OrderVO;
+import com.qiangpiao.vo.PaymentVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,7 +58,7 @@ public class OrderServiceImpl implements OrderService {
     private final SeckillRecordMapper seckillRecordMapper;
     private final TrainService trainService;
     private final SeatService seatService;
-    private final WalletService walletService;
+    private final PaymentService paymentService;
     private final PurchaseLimitService purchaseLimitService;
     private final StringRedisTemplate stringRedisTemplate;
 
@@ -79,7 +81,7 @@ public class OrderServiceImpl implements OrderService {
     public OrderDetailVO detail(String orderNo, Long userId) {
         OrderDO order = orderMapper.selectByOrderNo(orderNo);
         assertOrderOwner(order, userId);
-        TrainBO train = trainService.getTrainBO(order.getTrainId());
+        TrainBO train = resolveTrain(order);
         // 购票当天把乘车日期快照到订单，避免车次日期滚动导致历史订单日期被改写
         LocalDate snapshotDate = order.getDepartDate() != null ? order.getDepartDate() : train.getDepartDate();
         return OrderDetailVO.builder()
@@ -105,37 +107,10 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void pay(String orderNo, Long userId) {
-        // 订单号 / 用户写入 MDC，本单后续所有日志都能用 traceId 或 orderNo 串联
-        TraceContext.putOrder(orderNo);
-        TraceContext.putUser(userId);
-        OrderDO order = orderMapper.selectByOrderNo(orderNo);
-        assertOrderOwner(order, userId);
-        if (order.getStatus() == null || order.getStatus() != Constants.ORDER_STATUS_WAIT_PAY) {
-            throw new BizException(ResultCode.ORDER_STATUS_ERROR);
-        }
-        if (order.getExpireTime() != null && order.getExpireTime().isBefore(LocalDateTime.now())) {
-            throw new BizException(ResultCode.ORDER_EXPIRED);
-        }
-
-        // 先从钱包余额扣款（余额不足会抛异常，事务整体回滚），再置单为已支付
-        TrainBO train = trainService.getTrainBO(order.getTrainId());
-        String title = "购买 " + train.getTrainNo() + " " + TrainServiceImpl.seatTypeName(order.getSeatType());
-        String detail = train.getFromStationName() + " -> " + train.getToStationName()
-                + " " + order.getCarriageNo() + "车" + order.getSeatNo() + "座 · " + order.getPassengerName();
-        BigDecimal balance = walletService.pay(userId, order.getPrice(), orderNo, title, detail);
-        // 平台收款账户同步入账：用户扣款 -> 平台收款，形成资金闭环
-        creditPlatform(orderNo, train.getTrainNo(), order.getPrice(), detail);
-
-        int rows = orderMapper.markPaid(orderNo, LocalDateTime.now());
-        if (rows <= 0) {
-            throw new BizException(ResultCode.ORDER_PAY_FAILED);
-        }
-        appendOrderLog(orderNo, "PAY", "支付成功",
-                "扣款 " + order.getPrice() + " 元，钱包余额 " + balance, String.valueOf(userId));
-        log.info("订单支付成功：orderNo={}, userId={}, 扣款={}, 钱包余额={}",
-                orderNo, userId, order.getPrice(), balance);
+    public PaymentVO pay(PayDTO payDTO, Long userId) {
+        // 只负责「发起支付」：建支付单 + 等渠道回调，扣款/置已支付在回调里做（PaymentServiceImpl）
+        return paymentService.createPayment(payDTO.getOrderNo(), userId,
+                payDTO.getPayType(), payDTO.getIdempotentKey());
     }
 
     @Override
@@ -150,6 +125,8 @@ public class OrderServiceImpl implements OrderService {
         if (rows <= 0) {
             throw new BizException(ResultCode.ORDER_STATUS_ERROR);
         }
+        // 关闭名下未终态的支付单，后续回调命中幂等不会误入账
+        paymentService.closeByOrderNo(orderNo, "订单已取消");
         // 释放座位
         seatService.releaseSeat(orderNo);
         // 归还 DB 库存
@@ -176,7 +153,7 @@ public class OrderServiceImpl implements OrderService {
         if (order == null) {
             throw new BizException(ResultCode.ORDER_NOT_FOUND);
         }
-        TrainBO train = trainService.getTrainBO(order.getTrainId());
+        TrainBO train = resolveTrain(order);
         return OrderBO.builder()
                 .id(order.getId())
                 .orderNo(order.getOrderNo())
@@ -247,6 +224,13 @@ public class OrderServiceImpl implements OrderService {
         order.setOrderNo(taskBO.getOrderNo());
         order.setUserId(taskBO.getUserId());
         order.setTrainId(taskBO.getTrainId());
+        // 车次快照：车次日期会按天滚动、也可能被清理，历史订单必须自带车次信息
+        order.setTrainNoSnapshot(trainBO.getTrainNo());
+        order.setTrainTypeSnapshot(trainBO.getTrainType());
+        order.setFromStationSnapshot(trainBO.getFromStationName());
+        order.setToStationSnapshot(trainBO.getToStationName());
+        order.setDepartTimeSnapshot(trainBO.getDepartTime());
+        order.setArriveTimeSnapshot(trainBO.getArriveTime());
         order.setSeatId(seatBO.getSeatId());
         order.setSeatType(taskBO.getSeatType());
         order.setCarriageNo(seatBO.getCarriageNo());
@@ -286,6 +270,7 @@ public class OrderServiceImpl implements OrderService {
                 log.warn("超时关单失败：orderNo={}, msg={}", order.getOrderNo(), e.getMessage());
                 orderMapper.updateStatus(order.getOrderNo(), Constants.ORDER_STATUS_EXPIRED,
                         Constants.ORDER_STATUS_WAIT_PAY);
+                paymentService.closeByOrderNo(order.getOrderNo(), "订单已超时");
             }
         }
         if (count > 0) {
@@ -295,6 +280,47 @@ public class OrderServiceImpl implements OrderService {
     }
 
     // ==================== private ====================
+
+    /**
+     * 取订单的车次信息：优先用订单快照，其次才查 t_train。
+     * 车次会按天滚动、也可能被重建清理，历史订单不能因为车次不在就整页报错或消失。
+     */
+    private TrainBO resolveTrain(OrderDO order) {
+        TrainBO train = null;
+        try {
+            train = trainService.getTrainBO(order.getTrainId());
+        } catch (Exception e) {
+            log.debug("车次已下线，改用订单快照：orderNo={}, trainId={}, msg={}",
+                    order.getOrderNo(), order.getTrainId(), e.getMessage());
+        }
+        if (order.getTrainNoSnapshot() != null) {
+            TrainBO snapshot = train == null ? new TrainBO() : train;
+            snapshot.setTrainNo(order.getTrainNoSnapshot());
+            snapshot.setTrainType(order.getTrainTypeSnapshot());
+            snapshot.setFromStationName(order.getFromStationSnapshot());
+            snapshot.setToStationName(order.getToStationSnapshot());
+            if (order.getDepartTimeSnapshot() != null) {
+                snapshot.setDepartTime(order.getDepartTimeSnapshot());
+            }
+            if (order.getArriveTimeSnapshot() != null) {
+                snapshot.setArriveTime(order.getArriveTimeSnapshot());
+            }
+            if (order.getDepartDate() != null) {
+                snapshot.setDepartDate(order.getDepartDate());
+            }
+            return snapshot;
+        }
+        if (train != null) {
+            return train;
+        }
+        // 老订单既没快照、车次也没了：兜底展示，避免订单列表 / 车票列表整页报错
+        TrainBO fallback = new TrainBO();
+        fallback.setTrainNo("已下线车次");
+        fallback.setFromStationName("-");
+        fallback.setToStationName("-");
+        fallback.setDepartDate(order.getDepartDate());
+        return fallback;
+    }
 
     private void assertOrderOwner(OrderDO order, Long userId) {
         if (order == null) {
@@ -317,7 +343,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private OrderVO toVO(OrderDO order) {
-        TrainBO train = trainService.getTrainBO(order.getTrainId());
+        TrainBO train = resolveTrain(order);
         LocalDate snapshotDate = order.getDepartDate() != null ? order.getDepartDate() : train.getDepartDate();
         return OrderVO.builder()
                 .id(order.getId())
@@ -357,18 +383,6 @@ public class OrderServiceImpl implements OrderService {
                 return "已超时";
             default:
                 return "未知";
-        }
-    }
-
-    /**
-     * 平台收款：票款进入平台账户钱包（失败不影响支付主流程，只记录日志）。
-     */
-    private void creditPlatform(String orderNo, String trainNo, BigDecimal amount, String detail) {
-        try {
-            walletService.creditToPlatform(Constants.PLATFORM_USER_ID, amount, orderNo,
-                    "售票收入 " + trainNo, detail);
-        } catch (Exception e) {
-            log.warn("平台账户入账失败（不影响支付）：orderNo={}, msg={}", orderNo, e.getMessage());
         }
     }
 

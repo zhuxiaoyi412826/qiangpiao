@@ -28,7 +28,9 @@
         </el-descriptions>
 
         <div class="op-bar">
-          <el-button v-if="order.status === 0" type="primary" size="small" @click="doPay">立即支付</el-button>
+          <el-button v-if="order.status === 0" type="primary" size="small" :loading="paying" @click="doPay">
+            立即支付
+          </el-button>
           <el-button v-if="order.status === 0" type="danger" size="small" @click="doCancel">取消订单</el-button>
           <el-button v-if="order.status === 1" type="warning" size="small"
                      @click="$router.push(`/refund?orderNo=${order.orderNo}`)">退票 / 改签
@@ -68,14 +70,39 @@
         </template>
       </template>
     </div>
+
+    <!-- 支付中：第一阶段已发起支付，等待渠道异步回调 -->
+    <el-dialog v-model="payVisible" title="等待支付结果" width="420px" :close-on-click-modal="false"
+               @close="onPayDialogClose">
+      <template v-if="payment">
+        <el-descriptions :column="1" size="small" border>
+          <el-descriptions-item label="支付单号">{{ payment.payNo }}</el-descriptions-item>
+          <el-descriptions-item label="支付金额">¥{{ payment.amount }}</el-descriptions-item>
+          <el-descriptions-item label="支付方式">{{ payment.payType }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag size="small" :type="payTagType(payment.status)">{{ payment.statusText }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="渠道交易号">{{ payment.tradeNo || '回调后生成' }}</el-descriptions-item>
+        </el-descriptions>
+        <div class="pay-tip">
+          已发起支付，等待渠道回调（模拟渠道约 3 秒后回调）。回调验签 + 幂等通过后才会扣款并入账。
+        </div>
+      </template>
+      <template #footer>
+        <el-button size="small" @click="payVisible = false">稍后查看</el-button>
+        <el-button size="small" type="danger" @click="mockResult('FAIL')">模拟支付失败</el-button>
+        <el-button size="small" type="success" @click="mockResult('SUCCESS')">模拟支付成功</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchOrderDetail, payOrder, cancelOrder } from '@/api/order'
+import { fetchPayment, mockPayCallback } from '@/api/payment'
 import { fetchTimeline, fetchChanges } from '@/api/aftersale'
 import ErrorRetry from '@/components/ErrorRetry.vue'
 
@@ -89,7 +116,15 @@ const changes = ref([])
 const orderNo = route.params.orderNo
 const errorMsg = ref('')
 
+// 两阶段支付：发起支付后拿 payNo 轮询支付单，回调成功才扣款
+const paying = ref(false)
+const payVisible = ref(false)
+const payment = ref(null)
+let payTimer = null
+let pollTimes = 0
+
 onMounted(load)
+onBeforeUnmount(stopPolling)
 
 async function load() {
   loading.value = true
@@ -106,9 +141,86 @@ async function load() {
 }
 
 async function doPay() {
-  await payOrder(order.value.orderNo)
-  ElMessage.success('支付成功')
-  load()
+  paying.value = true
+  try {
+    // 第一阶段：只发起支付，不扣款
+    payment.value = await payOrder(order.value.orderNo)
+    payVisible.value = true
+    startPolling(payment.value.payNo)
+  } catch (e) {
+    await handlePayError(e)
+  } finally {
+    paying.value = false
+  }
+}
+
+function startPolling(payNo) {
+  stopPolling()
+  pollTimes = 0
+  payTimer = setInterval(async () => {
+    pollTimes++
+    try {
+      const p = await fetchPayment(payNo)
+      payment.value = p
+      if (p.status !== 0) {
+        stopPolling()
+        payVisible.value = false
+        if (p.status === 1) {
+          ElMessage.success('支付成功')
+        } else {
+          ElMessage.warning(p.failReason || '支付未完成，可重新发起支付')
+        }
+        load()
+      } else if (pollTimes >= 40) {
+        stopPolling()
+        ElMessage.info('支付结果确认中，请稍后刷新查看')
+      }
+    } catch (e) {
+      stopPolling()
+    }
+  }, 1500)
+}
+
+function stopPolling() {
+  if (payTimer) {
+    clearInterval(payTimer)
+    payTimer = null
+  }
+}
+
+function onPayDialogClose() {
+  // 关闭弹窗不停止等待：渠道回调仍会到达，刷新详情即可看到结果
+  payment.value = null
+}
+
+async function mockResult(result) {
+  if (!payment.value) return
+  await mockPayCallback(payment.value.payNo, result)
+  ElMessage.info(result === 'SUCCESS' ? '已模拟渠道成功回调' : '已模拟渠道失败回调')
+}
+
+async function handlePayError(e) {
+  const msg = e?.message || ''
+  if (msg.includes('余额不足')) {
+    try {
+      await ElMessageBox.confirm(msg + '，是否立即前往钱包充值？', '提示', {
+        type: 'warning',
+        confirmButtonText: '去充值',
+        cancelButtonText: '稍后再说'
+      })
+      router.push('/wallet')
+    } catch {
+      // 用户取消
+    }
+  } else {
+    ElMessage.error(msg || '发起支付失败')
+  }
+}
+
+function payTagType(status) {
+  if (status === 1) return 'success'
+  if (status === 0) return 'warning'
+  return 'danger'
 }
 
 async function doCancel() {
@@ -142,6 +254,7 @@ function timelineType(action) {
 .page-title { margin: 0 0 12px; font-size: 18px; }
 .op-bar { margin: 14px 0 4px; display: flex; gap: 10px; }
 .log-card { padding: 6px 10px; }
+.pay-tip { margin-top: 10px; font-size: 12px; color: #909399; line-height: 1.6; }
 .log-title { font-weight: 600; }
 .log-meta { font-size: 12px; margin-top: 2px; }
 </style>

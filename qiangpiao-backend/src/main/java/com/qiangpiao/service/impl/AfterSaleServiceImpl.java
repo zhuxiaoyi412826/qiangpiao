@@ -137,10 +137,14 @@ public class AfterSaleServiceImpl implements AfterSaleService {
             creditBackPlatform(diff.abs(), orderNo, newTrain.getTrainNo());
         }
 
+        // 车次快照同步更新，否则改签后订单仍显示旧车次
         adminMapper.updateOrderForChange(orderNo, newTrainId, seatType,
                 newSeat == null ? null : newSeat.getCarriageNo(),
                 newSeat == null ? null : newSeat.getSeatNo(),
-                stock.getPrice(), newTrain.getDepartDate());
+                stock.getPrice(), newTrain.getDepartDate(),
+                newTrain.getTrainNo(), newTrain.getTrainType(),
+                newTrain.getFromStationName(), newTrain.getToStationName(),
+                newTrain.getDepartTime(), newTrain.getArriveTime());
 
         OrderChangeDO change = new OrderChangeDO();
         change.setOrderNo(orderNo);

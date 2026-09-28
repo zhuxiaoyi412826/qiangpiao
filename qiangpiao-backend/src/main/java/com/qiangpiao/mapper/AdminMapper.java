@@ -143,7 +143,10 @@ public interface AdminMapper {
             "SELECT o.id, o.order_no, o.user_id, o.train_id, o.seat_type, o.carriage_no, o.seat_no," +
             " o.passenger_name, o.id_card, o.price, o.status, o.depart_date, o.create_time, o.pay_time," +
             " o.cancel_time, o.expire_time, u.username, u.phone," +
-            " t.train_no, t.from_station_name, t.to_station_name, t.depart_time" +
+            " COALESCE(o.train_no_snapshot, t.train_no) AS train_no," +
+            " COALESCE(o.from_station_snapshot, t.from_station_name) AS from_station_name," +
+            " COALESCE(o.to_station_snapshot, t.to_station_name) AS to_station_name," +
+            " COALESCE(o.depart_time_snapshot, t.depart_time) AS depart_time" +
             " FROM t_order o LEFT JOIN t_user u ON u.id = o.user_id LEFT JOIN t_train t ON t.id = o.train_id" +
             "<where>" +
             "<if test=\"orderNo != null and orderNo != ''\">AND o.order_no = #{orderNo}</if>" +
@@ -234,11 +237,22 @@ public interface AdminMapper {
 
     // ==================== 票务监控 / 统计报表 ====================
 
-    @Select("SELECT t.id AS trainId, t.train_no AS trainNo, t.depart_date AS departDate," +
+    // 库存 8000+ 行（2700 班次 × 3 席别），必须分页，否则后台首屏一次性拉全表会卡死页面
+    @Select("<script>SELECT s.id AS id, t.id AS trainId, t.train_no AS trainNo, t.depart_date AS departDate," +
             " s.seat_type AS seatType, s.total_count AS totalCount, s.available_count AS availableCount," +
             " s.price AS price FROM t_train_stock s INNER JOIN t_train t ON t.id = s.train_id" +
-            " ORDER BY t.depart_date, t.train_no, s.seat_type")
-    List<Map<String, Object>> stockMonitor();
+            "<where>" +
+            "<if test=\"trainNo != null and trainNo != ''\">AND t.train_no LIKE CONCAT('%', #{trainNo}, '%')</if>" +
+            "</where>" +
+            " ORDER BY t.depart_date, t.train_no, s.seat_type LIMIT #{offset}, #{limit}</script>")
+    List<Map<String, Object>> stockMonitor(@Param("trainNo") String trainNo,
+                                           @Param("offset") long offset, @Param("limit") long limit);
+
+    @Select("<script>SELECT COUNT(1) FROM t_train_stock s INNER JOIN t_train t ON t.id = s.train_id" +
+            "<where>" +
+            "<if test=\"trainNo != null and trainNo != ''\">AND t.train_no LIKE CONCAT('%', #{trainNo}, '%')</if>" +
+            "</where></script>")
+    long countStockMonitor(@Param("trainNo") String trainNo);
 
     @Select("SELECT id, train_id, seat_type, carriage_no, seat_no, status, order_no, update_time FROM t_seat" +
             " WHERE status = 2 ORDER BY update_time DESC LIMIT #{limit}")
@@ -303,9 +317,17 @@ public interface AdminMapper {
     int deductStock(@Param("trainId") Long trainId, @Param("seatType") Integer seatType);
 
     @Update("UPDATE t_order SET train_id = #{trainId}, seat_type = #{seatType}, carriage_no = #{carriageNo}," +
-            " seat_no = #{seatNo}, price = #{price}, depart_date = #{departDate} WHERE order_no = #{orderNo}")
+            " seat_no = #{seatNo}, price = #{price}, depart_date = #{departDate}," +
+            " train_no_snapshot = #{trainNo}, train_type_snapshot = #{trainType}," +
+            " from_station_snapshot = #{fromStation}, to_station_snapshot = #{toStation}," +
+            " depart_time_snapshot = #{departTime}, arrive_time_snapshot = #{arriveTime}" +
+            " WHERE order_no = #{orderNo}")
     int updateOrderForChange(@Param("orderNo") String orderNo, @Param("trainId") Long trainId,
                              @Param("seatType") Integer seatType, @Param("carriageNo") Integer carriageNo,
                              @Param("seatNo") String seatNo, @Param("price") java.math.BigDecimal price,
-                             @Param("departDate") LocalDate departDate);
+                             @Param("departDate") LocalDate departDate,
+                             @Param("trainNo") String trainNo, @Param("trainType") String trainType,
+                             @Param("fromStation") String fromStation, @Param("toStation") String toStation,
+                             @Param("departTime") java.time.LocalTime departTime,
+                             @Param("arriveTime") java.time.LocalTime arriveTime);
 }

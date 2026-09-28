@@ -19,6 +19,16 @@ public class OrderDO extends BaseDO {
     private String orderNo;
     private Long userId;
     private Long trainId;
+    /**
+     * 车次快照：下单当时把车次号 / 站名 / 时刻写进订单。
+     * 车次会按天滚动、也可能被重建清理，历史订单不能依赖 t_train 还在。
+     */
+    private String trainNoSnapshot;
+    private String trainTypeSnapshot;
+    private String fromStationSnapshot;
+    private String toStationSnapshot;
+    private java.time.LocalTime departTimeSnapshot;
+    private java.time.LocalTime arriveTimeSnapshot;
     private Long seatId;
     private Integer seatType;
     private Integer carriageNo;

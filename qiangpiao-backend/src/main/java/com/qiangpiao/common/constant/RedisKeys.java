@@ -46,6 +46,11 @@ public final class RedisKeys {
         return Constants.LIMIT_KEY + userId;
     }
 
+    /** 支付回调 nonce：防重放（同一 nonce 只处理一次） */
+    public static String payNotifyNonce(String nonce) {
+        return Constants.PAY_NOTIFY_NONCE_KEY + nonce;
+    }
+
     /** 分布式锁 key */
     public static String lock(String bizKey) {
         return Constants.LOCK_KEY + bizKey;

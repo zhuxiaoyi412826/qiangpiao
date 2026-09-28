@@ -8,6 +8,7 @@ import com.qiangpiao.dto.PayDTO;
 import com.qiangpiao.service.OrderService;
 import com.qiangpiao.vo.OrderDetailVO;
 import com.qiangpiao.vo.OrderVO;
+import com.qiangpiao.vo.PaymentVO;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
@@ -46,10 +47,9 @@ public class OrderController {
     }
 
     @PostMapping("/pay")
-    @ApiOperation("支付订单（模拟支付）")
-    public R<Void> pay(@Valid @RequestBody PayDTO payDTO) {
-        orderService.pay(payDTO.getOrderNo(), SecurityUtils.currentUserId());
-        return R.ok();
+    @ApiOperation("发起支付（第一阶段）：创建支付单，等待渠道异步回调后扣款")
+    public R<PaymentVO> pay(@Valid @RequestBody PayDTO payDTO) {
+        return R.ok(orderService.pay(payDTO, SecurityUtils.currentUserId()));
     }
 
     @PostMapping("/{orderNo}/cancel")

@@ -46,6 +46,8 @@ public class SecurityConfig {
             "/api/stations/**",
             "/api/announcements/**",
             "/api/health/**",
+            // 支付回调由渠道服务器调用，无 Token，靠验签保证来源可信
+            "/api/payments/notify",
             "/doc.html",
             "/swagger-resources/**",
             "/v2/api-docs",

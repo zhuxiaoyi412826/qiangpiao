@@ -6,12 +6,20 @@
     <sql id="Ticket_Column_List">
         o.id, o.order_no, o.train_id, o.seat_type, o.carriage_no, o.seat_no, o.passenger_name, o.id_card,
         o.price, o.status, o.depart_date, o.create_time, o.pay_time, o.expire_time,
-        t.train_no, t.train_type, t.from_station_name, t.to_station_name,
-        t.depart_time, t.arrive_time, t.duration_minutes
+        COALESCE(o.train_no_snapshot, t.train_no) AS train_no,
+        COALESCE(o.train_type_snapshot, t.train_type) AS train_type,
+        COALESCE(o.from_station_snapshot, t.from_station_name) AS from_station_name,
+        COALESCE(o.to_station_snapshot, t.to_station_name) AS to_station_name,
+        COALESCE(o.depart_time_snapshot, t.depart_time) AS depart_time,
+        COALESCE(o.arrive_time_snapshot, t.arrive_time) AS arrive_time,
+        t.duration_minutes
     </sql>
 
-    <!-- 发车时刻表达式：订单快照的乘车日期 + 车次发车时刻 -->
-    <sql id="Depart_At">TIMESTAMP(o.depart_date, t.depart_time)</sql>
+    <!--
+      发车时刻表达式：订单快照的乘车日期 + 车次发车时刻。
+      车次已下线（t_train 无记录）时回退到订单快照 / 00:00，保证历史车票仍能参与排序与筛选。
+    -->
+    <sql id="Depart_At">TIMESTAMP(o.depart_date, COALESCE(o.depart_time_snapshot, t.depart_time, '00:00:00'))</sql>
 
     <sql id="Ticket_Where">
         o.user_id = #{userId}
@@ -19,7 +27,7 @@
             <when test="history">
                 AND ((o.status = 1 AND
                 <include refid="Depart_At"/> &lt;= NOW())
-                OR o.status IN (2, 3, 4))
+                OR o.status IN (2, 3, 4, 5))
             </when>
             <otherwise>
                 AND o.status = 1
@@ -29,11 +37,12 @@
         </choose>
     </sql>
 
+    <!-- LEFT JOIN：车次被滚动/重建清理后，历史订单仍要能查出来（用订单快照展示） -->
     <select id="selectTickets" resultType="com.qiangpiao.dataobject.TicketDO">
         SELECT
         <include refid="Ticket_Column_List"/>
         FROM t_order o
-        INNER JOIN t_train t ON t.id = o.train_id
+        LEFT JOIN t_train t ON t.id = o.train_id
         WHERE
         <include refid="Ticket_Where"/>
         ORDER BY
@@ -53,7 +62,7 @@
     <select id="countTickets" resultType="long">
         SELECT COUNT(1)
         FROM t_order o
-        INNER JOIN t_train t ON t.id = o.train_id
+        LEFT JOIN t_train t ON t.id = o.train_id
         WHERE
         <include refid="Ticket_Where"/>
     </select>

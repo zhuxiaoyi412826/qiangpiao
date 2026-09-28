@@ -4,8 +4,10 @@
 <mapper namespace="com.qiangpiao.mapper.OrderMapper">
 
     <sql id="Base_Column_List">
-        id, order_no, user_id, train_id, seat_id, seat_type, carriage_no, seat_no, passenger_name, id_card,
-        price, status, depart_date, create_time, pay_time, cancel_time, expire_time, update_time
+        id, order_no, user_id, train_id, train_no_snapshot, train_type_snapshot, from_station_snapshot,
+        to_station_snapshot, depart_time_snapshot, arrive_time_snapshot, seat_id, seat_type, carriage_no, seat_no,
+        passenger_name, id_card, price, status, depart_date, create_time, pay_time, cancel_time, expire_time,
+        update_time
     </sql>
 
     <select id="selectById" resultType="com.qiangpiao.dataobject.OrderDO">
@@ -46,9 +48,13 @@
 
     <insert id="insert" parameterType="com.qiangpiao.dataobject.OrderDO"
             useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO t_order (order_no, user_id, train_id, seat_id, seat_type, carriage_no, seat_no, passenger_name,
+        INSERT INTO t_order (order_no, user_id, train_id, train_no_snapshot, train_type_snapshot,
+                             from_station_snapshot, to_station_snapshot, depart_time_snapshot, arrive_time_snapshot,
+                             seat_id, seat_type, carriage_no, seat_no, passenger_name,
                              id_card, price, status, depart_date, create_time, expire_time, update_time)
-        VALUES (#{orderNo}, #{userId}, #{trainId}, #{seatId}, #{seatType}, #{carriageNo}, #{seatNo}, #{passengerName},
+        VALUES (#{orderNo}, #{userId}, #{trainId}, #{trainNoSnapshot}, #{trainTypeSnapshot},
+                #{fromStationSnapshot}, #{toStationSnapshot}, #{departTimeSnapshot}, #{arriveTimeSnapshot},
+                #{seatId}, #{seatType}, #{carriageNo}, #{seatNo}, #{passengerName},
                 #{idCard}, #{price}, #{status}, #{departDate}, NOW(), #{expireTime}, NOW())
     </insert>
 

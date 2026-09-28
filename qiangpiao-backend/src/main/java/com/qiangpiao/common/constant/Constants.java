@@ -28,6 +28,8 @@ public final class Constants {
     public static final String SECKILL_RESULT_KEY = "qp:seckill:result:";
     /** 接口限流 */
     public static final String LIMIT_KEY = "qp:limit:user:";
+    /** 支付回调 nonce 防重放 */
+    public static final String PAY_NOTIFY_NONCE_KEY = "qp:pay:notify:nonce:";
     /** 分布式锁 */
     public static final String LOCK_KEY = "qp:lock:";
     /** 缓存空值占位，防穿透 */
@@ -54,6 +56,16 @@ public final class Constants {
     /** 已改签：原订单被改签到新车次后保留的历史状态 */
     public static final int ORDER_STATUS_CHANGED = 5;
 
+    /* ========== 支付单状态（t_payment.status） ========== */
+    /** 支付中：已发起，等待渠道异步回调 */
+    public static final int PAY_STATUS_PAYING = 0;
+    /** 支付成功：已收到成功回调并完成订单入账 */
+    public static final int PAY_STATUS_SUCCESS = 1;
+    /** 支付失败：渠道返回失败或入账失败 */
+    public static final int PAY_STATUS_FAILED = 2;
+    /** 已关闭：订单取消 / 超时，支付单不再接受回调 */
+    public static final int PAY_STATUS_CLOSED = 3;
+
     /** 用户状态：正常 */
     public static final int USER_STATUS_NORMAL = 1;
     /** 用户状态：禁用 */
@@ -78,6 +90,27 @@ public final class Constants {
     public static final int WALLET_FLOW_REFUND = 3;
     /** 钱包流水类型：平台售票收入（用户购票时进入平台账户） */
     public static final int WALLET_FLOW_PLATFORM_INCOME = 4;
+
+    /**
+     * 支付单状态文案。
+     */
+    public static String payStatusText(Integer status) {
+        if (status == null) {
+            return "未知";
+        }
+        switch (status) {
+            case PAY_STATUS_PAYING:
+                return "支付中";
+            case PAY_STATUS_SUCCESS:
+                return "支付成功";
+            case PAY_STATUS_FAILED:
+                return "支付失败";
+            case PAY_STATUS_CLOSED:
+                return "已关闭";
+            default:
+                return "未知";
+        }
+    }
 
     /**
      * 钱包流水类型文案。

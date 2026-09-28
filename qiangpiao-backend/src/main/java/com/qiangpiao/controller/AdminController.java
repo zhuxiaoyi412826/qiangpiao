@@ -251,9 +251,12 @@ public class AdminController {
     // ==================== 票务监控 ====================
 
     @GetMapping("/monitor/stock")
-    @ApiOperation("余票监控：各车次各席别剩余座位")
-    public R<List<Map<String, Object>>> stockMonitor() {
-        return R.ok(adminService.stockMonitor());
+    @ApiOperation("余票监控：各车次各席别剩余座位（分页）")
+    public R<PageResult<Map<String, Object>>> stockMonitor(
+            @RequestParam(defaultValue = "1") Integer pageNum,
+            @RequestParam(defaultValue = "20") Integer pageSize,
+            @RequestParam(required = false) String trainNo) {
+        return R.ok(adminService.stockMonitor(pageNum, pageSize, trainNo));
     }
 
     @GetMapping("/monitor/locked-seats")

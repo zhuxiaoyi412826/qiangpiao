@@ -128,6 +128,16 @@
 
         <!-- 票价 -->
         <el-tab-pane label="票价 / 库存" name="price">
+          <el-form :inline="true" size="small" @submit.prevent>
+            <el-form-item label="车次号">
+              <el-input v-model="stockTrainNo" clearable placeholder="如 G1001" style="width: 160px"
+                        @keyup.enter="reloadStocks" @clear="reloadStocks"/>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" size="small" @click="reloadStocks">查询</el-button>
+            </el-form-item>
+          </el-form>
+          <!-- 库存 8000+ 行：必须分页渲染，一次性拉全表会阻塞主线程数秒 -->
           <el-table :data="stocks" border size="small">
             <el-table-column prop="trainNo" label="车次" width="100"/>
             <el-table-column prop="departDate" label="发车日期" width="120"/>
@@ -147,6 +157,9 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination class="mt" background layout="total, prev, pager, next"
+                         :current-page="stockPage" :page-size="stockPageSize" :total="stockTotal"
+                         @current-change="p => { stockPage = p; loadStocks() }"/>
         </el-tab-pane>
 
         <!-- 订单 -->
@@ -580,6 +593,10 @@ const carriageRows = ref([])
 
 // 票价 / 库存
 const stocks = ref([])
+const stockPage = ref(1)
+const stockPageSize = ref(20)
+const stockTotal = ref(0)
+const stockTrainNo = ref('')
 
 // 订单
 const orders = ref([])
@@ -604,9 +621,32 @@ const noticeForm = ref({})
 // 监控
 const lockedSeats = ref([])
 
+// 后台数据量大（车次 2700 / 库存 8000 / 车站 3000），首屏只加载当前页签，切页签时再加载
+const loadedTabs = ref(new Set())
+const TAB_LOADERS = {
+  stats: loadStats,
+  stations: loadStations,
+  lines: loadLines,
+  trains: loadTrains,
+  price: loadStocks,
+  orders: loadOrders,
+  users: loadUsers,
+  notice: loadNotices,
+  monitor: loadLocked
+}
+
+async function ensureTab(name) {
+  const loader = TAB_LOADERS[name]
+  if (!loader || loadedTabs.value.has(name)) return
+  loadedTabs.value.add(name)
+  await loader()
+}
+
 onMounted(async () => {
-  await Promise.all([loadStats(), loadStations(), loadLines(), loadTrains(), loadStocks(),
-    loadOrders(), loadUsers(), loadNotices(), loadLocked()])
+  await ensureTab(tab.value)
+})
+watch(tab, v => {
+  ensureTab(v)
 })
 
 // ============ 数据加载 ============
@@ -632,7 +672,19 @@ async function loadTrains() {
   } catch (e) { ElMessage.error(e.message) } finally { loading.value = false }
 }
 async function loadStocks() {
-  try { stocks.value = await api.adminStockMonitor() } catch (e) { ElMessage.error(e.message) }
+  try {
+    const data = await api.adminStockMonitor({
+      pageNum: stockPage.value,
+      pageSize: stockPageSize.value,
+      trainNo: stockTrainNo.value
+    })
+    stocks.value = data.list || []
+    stockTotal.value = data.total || 0
+  } catch (e) { ElMessage.error(e.message) }
+}
+function reloadStocks() {
+  stockPage.value = 1
+  loadStocks()
 }
 async function loadOrders() {
   try {

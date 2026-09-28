@@ -85,6 +85,13 @@ CREATE TABLE IF NOT EXISTS t_order (
     order_no       VARCHAR(64)   NOT NULL COMMENT '订单号',
     user_id        BIGINT        NOT NULL COMMENT '用户ID',
     train_id       BIGINT        NOT NULL COMMENT '车次ID',
+    -- 车次快照：车次日期会按天滚动、也可能被重建清理，历史订单必须自带车次信息
+    train_no_snapshot     VARCHAR(32)   DEFAULT NULL COMMENT '车次号快照',
+    train_type_snapshot   VARCHAR(16)   DEFAULT NULL COMMENT '车次类型快照',
+    from_station_snapshot VARCHAR(64)   DEFAULT NULL COMMENT '出发站快照',
+    to_station_snapshot   VARCHAR(64)   DEFAULT NULL COMMENT '到达站快照',
+    depart_time_snapshot  TIME          DEFAULT NULL COMMENT '发车时刻快照',
+    arrive_time_snapshot  TIME          DEFAULT NULL COMMENT '到达时刻快照',
     seat_id        BIGINT        DEFAULT NULL COMMENT '座位ID',
     seat_type      TINYINT       NOT NULL COMMENT '席别',
     carriage_no    INT           DEFAULT NULL COMMENT '车厢号',
@@ -103,6 +110,31 @@ CREATE TABLE IF NOT EXISTS t_order (
     KEY idx_user_status (user_id, status),
     KEY idx_train (train_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='订单表';
+
+-- 支付流水表（两阶段支付：发起支付建单 -> 渠道异步回调后才扣款入账）
+CREATE TABLE IF NOT EXISTS t_payment (
+    id             BIGINT        PRIMARY KEY AUTO_INCREMENT COMMENT '主键',
+    pay_no         VARCHAR(64)   NOT NULL COMMENT '支付流水号',
+    order_no       VARCHAR(64)   NOT NULL COMMENT '订单号',
+    user_id        BIGINT        NOT NULL COMMENT '用户ID',
+    pay_type       VARCHAR(16)   NOT NULL DEFAULT 'ALIPAY' COMMENT '支付方式：ALIPAY / WECHAT / BALANCE',
+    amount         DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT '支付金额',
+    status         TINYINT       NOT NULL DEFAULT 0 COMMENT '0-支付中 1-支付成功 2-支付失败 3-已关闭',
+    idempotent_key VARCHAR(64)   NOT NULL COMMENT '发起支付幂等键：同一键只生成一笔有效支付单',
+    trade_no       VARCHAR(64)   DEFAULT NULL COMMENT '渠道交易号（回调带回）',
+    notify_count   INT           NOT NULL DEFAULT 0 COMMENT '回调次数（含重复回调）',
+    pay_time       DATETIME      DEFAULT NULL COMMENT '支付成功时间',
+    notify_time    DATETIME      DEFAULT NULL COMMENT '最近一次回调时间',
+    expire_time    DATETIME      DEFAULT NULL COMMENT '支付单超时时间',
+    fail_reason    VARCHAR(255)  DEFAULT NULL COMMENT '失败 / 关闭原因',
+    create_time    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    UNIQUE KEY uk_pay_no (pay_no),
+    UNIQUE KEY uk_idempotent_key (idempotent_key),
+    KEY idx_order_no (order_no),
+    KEY idx_user_time (user_id, create_time),
+    KEY idx_status_expire (status, expire_time)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='支付流水表';
 
 -- 钱包表（余额 + 累计充值/消费，乐观锁防并发扣款）
 CREATE TABLE IF NOT EXISTS t_wallet (

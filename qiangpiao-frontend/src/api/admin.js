@@ -49,7 +49,7 @@ export const saveAdminAnnouncement = data => request.post('/admin/announcements'
 export const deleteAdminAnnouncement = id => request.delete(`/admin/announcements/${id}`)
 
 // ============ 监控 / 报表 ============
-export const adminStockMonitor = () => request.get('/admin/monitor/stock')
+export const adminStockMonitor = params => request.get('/admin/monitor/stock', { params })
 export const adminLockedSeats = limit => request.get('/admin/monitor/locked-seats', { params: { limit } })
 export const adminStats = () => request.get('/admin/stats')
 export const adminDailySales = () => request.get('/admin/stats/daily-sales')

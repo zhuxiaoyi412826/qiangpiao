@@ -132,9 +132,10 @@ function fmtTime(v) {
 
 async function pay(row) {
   try {
+    // 第一阶段：发起支付，扣款在渠道回调后完成，跳详情页等待结果
     await payOrder(row.orderNo)
-    ElMessage.success('支付成功')
-    loadOrders()
+    ElMessage.success('已发起支付，等待渠道回调')
+    router.push(`/orders/${row.orderNo}`)
   } catch (e) {
     // 余额不足时引导去钱包充值
     if (e.message && e.message.indexOf('余额不足') >= 0) {

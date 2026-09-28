@@ -57,6 +57,11 @@ public enum ResultCode {
     ORDER_STATUS_ERROR(4002, "订单状态不正确"),
     ORDER_EXPIRED(4003, "订单已超时，请重新下单"),
     ORDER_PAY_FAILED(4004, "支付失败"),
+    ORDER_PAYING(4005, "支付处理中，请勿重复发起"),
+    PAYMENT_NOT_FOUND(4006, "支付单不存在"),
+    PAY_SIGN_INVALID(4007, "回调验签失败"),
+    PAY_AMOUNT_MISMATCH(4008, "回调金额与支付单不一致"),
+    PAY_NOTIFY_EXPIRED(4009, "回调已过期：时间戳超出有效窗口"),
 
     /* ========== 钱包 5000+ ========== */
     WALLET_NOT_FOUND(5001, "钱包不存在，请稍后重试"),
