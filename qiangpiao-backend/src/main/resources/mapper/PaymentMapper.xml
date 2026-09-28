@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.qiangpiao.mapper.PaymentMapper">
+
+    <sql id="Base_Column_List">
+        id, pay_no, order_no, user_id, pay_type, amount, status, idempotent_key, trade_no, notify_count,
+        pay_time, notify_time, expire_time, fail_reason, create_time, update_time
+    </sql>
+
+    <select id="selectByPayNo" resultType="com.qiangpiao.dataobject.PaymentDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_payment
+        WHERE pay_no = #{payNo}
+        LIMIT 1
+    </select>
+
+    <select id="selectByIdempotentKey" resultType="com.qiangpiao.dataobject.PaymentDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_payment
+        WHERE idempotent_key = #{idempotentKey}
+        LIMIT 1
+    </select>
+
+    <!-- 幂等键含重试后缀（base 或 base#id），取最新一笔 -->
+    <select id="selectLatestByIdempotent" resultType="com.qiangpiao.dataobject.PaymentDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_payment
+        WHERE idempotent_key = #{base}
+           OR idempotent_key LIKE CONCAT(#{base}, '#%')
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+    <select id="selectByOrderNo" resultType="com.qiangpiao.dataobject.PaymentDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_payment
+        WHERE order_no = #{orderNo}
+        ORDER BY id DESC
+    </select>
+
+    <insert id="insert" parameterType="com.qiangpiao.dataobject.PaymentDO"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_payment (pay_no, order_no, user_id, pay_type, amount, status, idempotent_key, trade_no,
+                               notify_count, pay_time, notify_time, expire_time, fail_reason, create_time, update_time)
+        VALUES (#{payNo}, #{orderNo}, #{userId}, #{payType}, #{amount}, #{status}, #{idempotentKey}, #{tradeNo},
+                #{notifyCount}, #{payTime}, #{notifyTime}, #{expireTime}, #{failReason}, NOW(), NOW())
+    </insert>
+
+    <update id="markSuccess">
+        UPDATE t_payment
+        SET status       = 1,
+            trade_no     = #{tradeNo},
+            pay_time     = NOW(),
+            notify_time  = NOW(),
+            notify_count = notify_count + 1,
+            fail_reason  = NULL
+        WHERE pay_no = #{payNo}
+          AND status = 0
+    </update>
+
+    <update id="markFailed">
+        UPDATE t_payment
+        SET status      = 2,
+            notify_time = NOW(),
+            fail_reason = #{reason}
+        WHERE pay_no = #{payNo}
+          AND status IN (0, 1)
+    </update>
+
+    <update id="markClosed">
+        UPDATE t_payment
+        SET status      = 3,
+            notify_time = NOW(),
+            fail_reason = #{reason}
+        WHERE pay_no = #{payNo}
+          AND status = 0
+    </update>
+
+    <update id="closeByOrderNo">
+        UPDATE t_payment
+        SET status      = 3,
+            notify_time = NOW(),
+            fail_reason = #{reason}
+        WHERE order_no = #{orderNo}
+          AND status = 0
+    </update>
+
+    <update id="increaseNotifyCount">
+        UPDATE t_payment
+        SET notify_count = notify_count + 1,
+            notify_time  = NOW()
+        WHERE pay_no = #{payNo}
+    </update>
+</mapper>
