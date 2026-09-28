@@ -3,14 +3,13 @@
     <div class="card-panel">
       <el-form :inline="true" :model="query" @submit.prevent>
         <el-form-item label="出发站">
-          <el-select v-model="query.fromStation" filterable clearable placeholder="请选择" style="width: 150px">
-            <el-option v-for="s in stations" :key="s.id" :label="s.stationName" :value="s.stationName"/>
-          </el-select>
+          <!-- 站点 3000+，用虚拟滚动选择器，避免渲染上千 el-option 卡死主线程 -->
+          <el-select-v2 v-model="query.fromStation" :options="stationOptions" filterable clearable
+                        placeholder="输入或选择" style="width: 180px"/>
         </el-form-item>
         <el-form-item label="到达站">
-          <el-select v-model="query.toStation" filterable clearable placeholder="请选择" style="width: 150px">
-            <el-option v-for="s in stations" :key="s.id" :label="s.stationName" :value="s.stationName"/>
-          </el-select>
+          <el-select-v2 v-model="query.toStation" :options="stationOptions" filterable clearable
+                        placeholder="输入或选择" style="width: 180px"/>
         </el-form-item>
         <el-form-item label="出发日期">
           <el-date-picker v-model="query.departDate" type="date" value-format="YYYY-MM-DD"
@@ -28,10 +27,14 @@
     </div>
 
     <div class="card-panel">
-      <el-table :data="list" v-loading="loading" border style="width: 100%">
+      <SkeletonCard v-if="loading" :rows="4" show-table/>
+      <ErrorRetry v-else-if="errorMsg" :message="errorMsg" @retry="search(false)"/>
+      <template v-else>
+      <el-table :data="list" border style="width: 100%">
         <el-table-column label="车次" width="130">
           <template #default="{ row }">
-            <span class="train-no">{{ row.trainNo }}</span>
+            <!-- 点击车次号查看时刻表（站点时序） -->
+            <a class="train-no train-link" title="点击查看时刻表" @click="openStops(row)">{{ row.trainNo }}</a>
             <div class="muted">{{ row.trainType }}</div>
           </template>
         </el-table-column>
@@ -74,7 +77,48 @@
       <el-pagination class="pager" background layout="total, prev, pager, next"
                      :current-page="query.pageNum" :page-size="query.pageSize" :total="total"
                      @current-change="onPageChange"/>
+      </template>
     </div>
+
+    <!-- 时刻表（站点时序）弹窗：点击车次号查看，12306 同款样式 -->
+    <el-dialog v-model="stopsVisible" title="时刻表" width="560px"
+               :close-on-click-modal="false" append-to-body>
+      <div v-loading="stopsLoading" style="min-height: 160px">
+        <el-table :data="stops" border size="small"
+                  :header-cell-style="{ background: '#3a8ee6', color: '#fff', fontWeight: 600 }"
+                  max-height="420">
+          <el-table-column label="站序" width="70" align="center">
+            <template #default="{ row }">{{ String(row.stopOrder).padStart(2, '0') }}</template>
+          </el-table-column>
+          <el-table-column label="站名" min-width="120">
+            <template #default="{ row }">
+              <span :class="{ 'stop-current': row.stationName === activeTrain.fromStationName }">
+                {{ row.stationName }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="到站时间" width="110" align="center">
+            <template #default="{ row }">{{ fmtTime(row.arriveTime) }}</template>
+          </el-table-column>
+          <el-table-column label="出发时间" width="110" align="center">
+            <template #default="{ row }">{{ fmtTime(row.departTime) }}</template>
+          </el-table-column>
+          <el-table-column label="停留时间" width="100" align="center">
+            <template #default="{ row }">{{ row.stopMinutes > 0 ? row.stopMinutes + '分钟' : '----' }}</template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-if="!stopsLoading && !stops.length" description="该车次未配置时刻表" :image-size="60"/>
+        <div v-if="stops.length" class="stops-footer">
+          <strong class="stops-train">{{ activeTrain.trainNo }}次</strong>
+          <span>{{ activeTrain.fromStationName }} --&gt; {{ activeTrain.toStationName }}</span>
+          <span>{{ activeTrain.trainType }}</span>
+          <el-tag type="success" size="small">有空调</el-tag>
+        </div>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="stopsVisible = false">关 闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -82,7 +126,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { queryTrains } from '@/api/train'
+import { queryTrains, fetchTrainStops } from '@/api/train'
+import SkeletonCard from '@/components/SkeletonCard.vue'
+import ErrorRetry from '@/components/ErrorRetry.vue'
 import { useStationStore } from '@/store/station'
 import { localCache } from '@/utils/cache'
 import dayjs from '@/utils/dayjs'
@@ -91,10 +137,15 @@ const router = useRouter()
 const stationStore = useStationStore()
 
 const stations = computed(() => stationStore.stations)
+/** 供 el-select-v2 使用（虚拟滚动，只渲染可视项） */
+const stationOptions = computed(() =>
+  stations.value.map(s => ({ value: s.stationName, label: s.stationName }))
+)
 const loading = ref(false)
 const list = ref([])
 const total = ref(0)
 const fromCache = ref(false)
+const errorMsg = ref('')
 
 const query = ref({
   fromStation: '',
@@ -119,6 +170,7 @@ function cacheKey() {
 
 async function search(force) {
   loading.value = true
+  errorMsg.value = ''
   try {
     if (!force) {
       const cached = localCache.get(cacheKey())
@@ -136,7 +188,8 @@ async function search(force) {
     // 前端缓存 30 秒，降低后端 QPS
     localCache.set(cacheKey(), { list: list.value, total: total.value }, 30)
   } catch (e) {
-    ElMessage.error(e.message)
+    // 展示「加载失败 + 重试」而不是只弹一条消息，弱网下用户可一键重试
+    errorMsg.value = e.message || '查询车次失败'
   } finally {
     loading.value = false
   }
@@ -171,6 +224,36 @@ function pickTomorrow() {
 function goDetail(trainId) {
   router.push(`/trains/${trainId}`)
 }
+
+// ---------- 时刻表（站点时序）弹窗 ----------
+const stopsVisible = ref(false)
+const stopsLoading = ref(false)
+const stops = ref([])
+const activeTrain = ref({ trainNo: '', fromStationName: '', toStationName: '', trainType: '' })
+
+/** 点击车次号：打开弹窗并加载该车次时刻表 */
+function openStops(row) {
+  activeTrain.value = row
+  stops.value = []
+  stopsVisible.value = true
+  loadStops()
+}
+
+async function loadStops() {
+  stopsLoading.value = true
+  try {
+    stops.value = await fetchTrainStops(activeTrain.value.id) || []
+  } catch (e) {
+    ElMessage.error(e.message || '加载时刻表失败')
+  } finally {
+    stopsLoading.value = false
+  }
+}
+
+/** LocalTime 序列化成 HH:mm:ss，展示取 HH:mm */
+function fmtTime(t) {
+  return t ? String(t).slice(0, 5) : '----'
+}
 </script>
 
 <style scoped>
@@ -184,5 +267,36 @@ function goDetail(trainId) {
 .pager {
   margin-top: 16px;
   justify-content: flex-end;
+}
+
+.train-link {
+  cursor: pointer;
+}
+
+.train-link:hover {
+  text-decoration: underline;
+}
+
+/* ---------- 时刻表弹窗 ---------- */
+.stop-current {
+  color: #3a8ee6;
+  font-weight: 600;
+}
+
+.stops-footer {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #f0f7ff;
+  border: 1px solid #d4e7f7;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: #303133;
+}
+
+.stops-train {
+  color: #3a8ee6;
 }
 </style>

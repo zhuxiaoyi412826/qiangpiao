@@ -29,9 +29,11 @@ public final class RedisKeys {
         return Constants.STOCK_KEY + trainId + ":" + seatType;
     }
 
-    /** 一人一单 key */
-    public static String seckillUser(Long trainId, Integer seatType, Long userId) {
-        return Constants.SECKILL_USER_KEY + trainId + ":" + seatType + ":" + userId;
+    /**
+     * 限购标记 key：按「车次 + 用户」维度（不分席别），实现每人每天每车次限购 1 张。
+     */
+    public static String seckillUser(Long trainId, Long userId) {
+        return Constants.SECKILL_USER_KEY + trainId + ":" + userId;
     }
 
     /** 抢票结果 key（订单号） */

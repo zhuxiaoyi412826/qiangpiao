@@ -1,6 +1,7 @@
 package com.qiangpiao.config;
 
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.qiangpiao.interceptor.TraceIdInterceptor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.context.annotation.ComponentScan;
@@ -28,6 +29,18 @@ import java.util.List;
         "com.qiangpiao.common.exception"
 })
 public class WebMvcConfig implements WebMvcConfigurer {
+
+    private final TraceIdInterceptor traceIdInterceptor;
+
+    public WebMvcConfig(TraceIdInterceptor traceIdInterceptor) {
+        this.traceIdInterceptor = traceIdInterceptor;
+    }
+
+    @Override
+    public void addInterceptors(org.springframework.web.servlet.config.annotation.InterceptorRegistry registry) {
+        // 请求入口生成 traceId 写入 MDC，串联整条业务日志
+        registry.addInterceptor(traceIdInterceptor).addPathPatterns("/**");
+    }
 
     @Override
     public void configureMessageConverters(List<HttpMessageConverter<?>> converters) {

@@ -1,5 +1,8 @@
 <template>
   <div class="page-container">
+    <SkeletonCard v-if="loading" :rows="3"/>
+    <ErrorRetry v-else-if="errorMsg" :message="errorMsg" @retry="reload"/>
+    <template v-else>
     <div class="card-panel wallet-panel">
       <div class="wallet-info">
         <div class="label">账户余额（元）</div>
@@ -50,6 +53,7 @@
                      :current-page="pageNum" :page-size="pageSize" :total="total"
                      @current-change="onPageChange"/>
     </div>
+    </template>
 
     <el-dialog v-model="rechargeVisible" title="钱包充值" width="420px">
       <el-form label-width="72px">
@@ -77,6 +81,8 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchWallet, queryWalletFlows, rechargeWallet } from '@/api/wallet'
+import SkeletonCard from '@/components/SkeletonCard.vue'
+import ErrorRetry from '@/components/ErrorRetry.vue'
 
 const loading = ref(false)
 const recharging = ref(false)
@@ -89,28 +95,37 @@ const quickAmounts = [50, 100, 200, 500, 1000]
 const rechargeVisible = ref(false)
 const amount = ref(100)
 const remark = ref('')
+const errorMsg = ref('')
 
 onMounted(() => {
   loadWallet()
   loadFlows()
 })
 
+// 失败后整体重试（余额 + 流水）
+function reload() {
+  loadWallet()
+  loadFlows()
+}
+
 async function loadWallet() {
   try {
     wallet.value = await fetchWallet() || {}
+    errorMsg.value = ''
   } catch (e) {
-    ElMessage.error(e.message)
+    errorMsg.value = e.message || '加载钱包失败'
   }
 }
 
 async function loadFlows() {
   loading.value = true
+  errorMsg.value = ''
   try {
     const data = await queryWalletFlows({ pageNum: pageNum.value, pageSize: pageSize.value })
     list.value = data.list || []
     total.value = data.total || 0
   } catch (e) {
-    ElMessage.error(e.message)
+    errorMsg.value = e.message || '加载零钱明细失败'
   } finally {
     loading.value = false
   }

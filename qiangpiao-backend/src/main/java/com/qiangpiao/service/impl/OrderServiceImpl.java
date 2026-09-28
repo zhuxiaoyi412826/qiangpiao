@@ -9,12 +9,16 @@ import com.qiangpiao.common.constant.RedisKeys;
 import com.qiangpiao.common.exception.BizException;
 import com.qiangpiao.common.result.PageResult;
 import com.qiangpiao.common.result.ResultCode;
+import com.qiangpiao.common.util.TraceContext;
 import com.qiangpiao.dataobject.OrderDO;
 import com.qiangpiao.dataobject.SeckillRecordDO;
 import com.qiangpiao.dataobject.TrainStockDO;
 import com.qiangpiao.dto.OrderQueryDTO;
+import com.qiangpiao.dataobject.OrderLogDO;
+import com.qiangpiao.mapper.AdminMapper;
 import com.qiangpiao.mapper.OrderMapper;
 import com.qiangpiao.mapper.SeckillRecordMapper;
+import com.qiangpiao.service.PurchaseLimitService;
 import com.qiangpiao.mapper.TrainStockMapper;
 import com.qiangpiao.service.OrderService;
 import com.qiangpiao.service.SeatService;
@@ -47,11 +51,13 @@ public class OrderServiceImpl implements OrderService {
     private static final int RETRY_TIMES = 3;
 
     private final OrderMapper orderMapper;
+    private final AdminMapper adminMapper;
     private final TrainStockMapper trainStockMapper;
     private final SeckillRecordMapper seckillRecordMapper;
     private final TrainService trainService;
     private final SeatService seatService;
     private final WalletService walletService;
+    private final PurchaseLimitService purchaseLimitService;
     private final StringRedisTemplate stringRedisTemplate;
 
     @Value("${order.pay-timeout-minutes}")
@@ -101,6 +107,9 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void pay(String orderNo, Long userId) {
+        // 订单号 / 用户写入 MDC，本单后续所有日志都能用 traceId 或 orderNo 串联
+        TraceContext.putOrder(orderNo);
+        TraceContext.putUser(userId);
         OrderDO order = orderMapper.selectByOrderNo(orderNo);
         assertOrderOwner(order, userId);
         if (order.getStatus() == null || order.getStatus() != Constants.ORDER_STATUS_WAIT_PAY) {
@@ -116,11 +125,15 @@ public class OrderServiceImpl implements OrderService {
         String detail = train.getFromStationName() + " -> " + train.getToStationName()
                 + " " + order.getCarriageNo() + "车" + order.getSeatNo() + "座 · " + order.getPassengerName();
         BigDecimal balance = walletService.pay(userId, order.getPrice(), orderNo, title, detail);
+        // 平台收款账户同步入账：用户扣款 -> 平台收款，形成资金闭环
+        creditPlatform(orderNo, train.getTrainNo(), order.getPrice(), detail);
 
         int rows = orderMapper.markPaid(orderNo, LocalDateTime.now());
         if (rows <= 0) {
             throw new BizException(ResultCode.ORDER_PAY_FAILED);
         }
+        appendOrderLog(orderNo, "PAY", "支付成功",
+                "扣款 " + order.getPrice() + " 元，钱包余额 " + balance, String.valueOf(userId));
         log.info("订单支付成功：orderNo={}, userId={}, 扣款={}, 钱包余额={}",
                 orderNo, userId, order.getPrice(), balance);
     }
@@ -146,13 +159,14 @@ public class OrderServiceImpl implements OrderService {
         }
         // 归还 Redis 库存 + 清理一人一单标记
         rollbackRedisStock(order.getTrainId(), order.getSeatType());
-        stringRedisTemplate.delete(RedisKeys.seckillUser(order.getTrainId(), order.getSeatType(), order.getUserId()));
+        stringRedisTemplate.delete(RedisKeys.seckillUser(order.getTrainId(), order.getUserId()));
         stringRedisTemplate.delete(RedisKeys.seckillResult(order.getTrainId(), order.getSeatType(), order.getUserId()));
         seckillRecordMapper.deleteByOrderNo(orderNo);
 
         // 失效缓存，保证余票展示一致
         trainService.evictTrainCache(order.getTrainId());
         seatService.evictSeatCache(order.getTrainId(), order.getSeatType());
+        appendOrderLog(orderNo, "CANCEL", "取消订单", "座位已释放，库存已归还", String.valueOf(order.getUserId()));
         log.info("订单取消成功：orderNo={}, userId={}", orderNo, userId);
     }
 
@@ -190,6 +204,11 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public OrderDO createSeckillOrder(SeckillTaskBO taskBO) {
+        // 0. 限购兜底：并发下同步层可能同时放行，落库前以 DB 为准再判一次
+        //    （每人每天每车次 1 张 + 已购车次运行时间内不可再买）
+        TrainBO trainBO = trainService.getTrainBO(taskBO.getTrainId());
+        purchaseLimitService.assertCanBuy(taskBO.getUserId(), trainBO);
+
         // 1. 幂等：一人一单（唯一索引兜底）
         SeckillRecordDO record = new SeckillRecordDO();
         record.setTrainId(taskBO.getTrainId());
@@ -236,7 +255,7 @@ public class OrderServiceImpl implements OrderService {
         order.setIdCard(taskBO.getIdCard());
         order.setPrice(stock.getPrice());
         // 乘车日期快照：后续车次日期滚动时，已生成订单的乘车日期保持不变
-        order.setDepartDate(trainService.getTrainBO(taskBO.getTrainId()).getDepartDate());
+        order.setDepartDate(trainBO.getDepartDate());
         order.setStatus(Constants.ORDER_STATUS_WAIT_PAY);
         order.setExpireTime(LocalDateTime.now().plusMinutes(payTimeoutMinutes));
         orderMapper.insert(order);
@@ -244,6 +263,9 @@ public class OrderServiceImpl implements OrderService {
         // 5. 失效缓存
         trainService.evictTrainCache(taskBO.getTrainId());
         seatService.evictSeatCache(taskBO.getTrainId(), taskBO.getSeatType());
+        appendOrderLog(order.getOrderNo(), "CREATE", "下单成功",
+                "车次 " + taskBO.getTrainId() + " " + order.getCarriageNo() + "车" + order.getSeatNo() + "座，待支付 " + order.getPrice() + " 元",
+                String.valueOf(order.getUserId()));
         log.info("秒杀订单落库成功：orderNo={}, userId={}, trainId={}, seat={}车{}座",
                 taskBO.getOrderNo(), taskBO.getUserId(), taskBO.getTrainId(),
                 seatBO.getCarriageNo(), seatBO.getSeatNo());
@@ -335,6 +357,37 @@ public class OrderServiceImpl implements OrderService {
                 return "已超时";
             default:
                 return "未知";
+        }
+    }
+
+    /**
+     * 平台收款：票款进入平台账户钱包（失败不影响支付主流程，只记录日志）。
+     */
+    private void creditPlatform(String orderNo, String trainNo, BigDecimal amount, String detail) {
+        try {
+            walletService.creditToPlatform(Constants.PLATFORM_USER_ID, amount, orderNo,
+                    "售票收入 " + trainNo, detail);
+        } catch (Exception e) {
+            log.warn("平台账户入账失败（不影响支付）：orderNo={}, msg={}", orderNo, e.getMessage());
+        }
+    }
+
+    /**
+     * 写入订单流转日志（时间轴节点）：下单 / 支付 / 取消 / 退票 / 改签 / 超时。
+     * 日志写入失败不影响主流程。
+     */
+    private void appendOrderLog(String orderNo, String action, String actionText, String detail, String operator) {
+        try {
+            OrderLogDO logDO = new OrderLogDO();
+            logDO.setOrderNo(orderNo);
+            logDO.setAction(action);
+            logDO.setActionText(actionText);
+            logDO.setDetail(detail);
+            logDO.setOperator(operator);
+            logDO.setTraceId(TraceContext.traceId());
+            adminMapper.insertOrderLog(logDO);
+        } catch (Exception e) {
+            log.warn("写入订单流转日志失败：orderNo={}, msg={}", orderNo, e.getMessage());
         }
     }
 

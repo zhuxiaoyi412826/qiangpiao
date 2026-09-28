@@ -51,6 +51,8 @@ public final class Constants {
     public static final int ORDER_STATUS_REFUNDED = 3;
     /** 订单状态：已超时 */
     public static final int ORDER_STATUS_EXPIRED = 4;
+    /** 已改签：原订单被改签到新车次后保留的历史状态 */
+    public static final int ORDER_STATUS_CHANGED = 5;
 
     /** 用户状态：正常 */
     public static final int USER_STATUS_NORMAL = 1;
@@ -61,6 +63,11 @@ public final class Constants {
     public static final int SEAT_TYPE_BUSINESS = 1;
     public static final int SEAT_TYPE_FIRST = 2;
     public static final int SEAT_TYPE_SECOND = 3;
+    public static final int SEAT_TYPE_SOFT_SLEEPER = 4;
+    public static final int SEAT_TYPE_HARD_SLEEPER = 5;
+
+    /** 平台收款账户：用户购票时票款进入该账户钱包（对应 t_user.id） */
+    public static final Long PLATFORM_USER_ID = 1L;
 
     /* ========== 钱包零钱流水 ========== */
     /** 钱包流水类型：充值 */
@@ -69,6 +76,8 @@ public final class Constants {
     public static final int WALLET_FLOW_CONSUME = 2;
     /** 钱包流水类型：退款 */
     public static final int WALLET_FLOW_REFUND = 3;
+    /** 钱包流水类型：平台售票收入（用户购票时进入平台账户） */
+    public static final int WALLET_FLOW_PLATFORM_INCOME = 4;
 
     /**
      * 钱包流水类型文案。
@@ -84,6 +93,8 @@ public final class Constants {
                 return "消费";
             case WALLET_FLOW_REFUND:
                 return "退款";
+            case WALLET_FLOW_PLATFORM_INCOME:
+                return "平台售票收入";
             default:
                 return "未知";
         }

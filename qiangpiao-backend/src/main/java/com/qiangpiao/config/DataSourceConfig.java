@@ -43,6 +43,9 @@ public class DataSourceConfig {
     private boolean testOnBorrow;
     @Value("${jdbc.testOnReturn}")
     private boolean testOnReturn;
+    /** 慢 SQL 阈值（毫秒），与 MyBatis SlowSqlInterceptor 保持一致 */
+    @Value("${sql.slow-threshold-ms:100}")
+    private long slowSqlMillis;
 
     /**
      * 外部化配置：环境变量 &gt; JVM 系统属性 &gt; config.properties。
@@ -94,7 +97,7 @@ public class DataSourceConfig {
     @Bean
     public StatFilter statFilter() {
         StatFilter statFilter = new StatFilter();
-        statFilter.setSlowSqlMillis(3000);
+        statFilter.setSlowSqlMillis(slowSqlMillis);
         statFilter.setLogSlowSql(true);
         statFilter.setMergeSql(true);
         return statFilter;

@@ -93,4 +93,25 @@
           AND user_id = #{userId}
           AND status IN (0, 1)
     </select>
+
+    <!-- 行程冲突：用户已购有效订单的运行区间与目标区间重叠（跨天到达用 arrive_time <= depart_time 判定 +1 天） -->
+    <select id="selectTripConflicts" resultType="java.util.Map">
+        SELECT o.order_no          AS orderNo,
+               o.train_id          AS trainId,
+               o.depart_date       AS departDate,
+               t.train_no          AS trainNo,
+               t.depart_time       AS departTime,
+               t.arrive_time       AS arriveTime,
+               t.from_station_name AS fromStationName,
+               t.to_station_name   AS toStationName
+        FROM t_order o
+                 JOIN t_train t ON t.id = o.train_id
+        WHERE o.user_id = #{userId}
+          AND o.status IN (0, 1)
+          AND TIMESTAMP(COALESCE(o.depart_date, t.depart_date), t.depart_time) &lt; #{end}
+          AND DATE_ADD(TIMESTAMP(COALESCE(o.depart_date, t.depart_date), t.arrive_time),
+                       INTERVAL IF(t.arrive_time &lt;= t.depart_time, 1, 0) DAY) &gt; #{start}
+        ORDER BY o.depart_date
+        LIMIT 5
+    </select>
 </mapper>

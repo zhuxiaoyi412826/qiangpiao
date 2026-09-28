@@ -1,43 +1,161 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  =============================================================================
+  日志配置说明（Logback 1.2.x / Spring + MyBatis，war 部署 Tomcat）
+
+  文件职责（严格按级别隔离，互不交叉）：
+    CONSOLE          控制台，级别由 CONSOLE_LEVEL 控制（默认 DEBUG），生产可 -DCONSOLE_LEVEL=INFO
+    DEBUG.log        FileAppender，append=false → 每次重启清空重写；输出 DEBUG 及以上，镜像控制台全部内容
+    info-yyyy-MM-dd.log    仅 INFO
+    warn-yyyy-MM-dd.log    仅 WARN
+    error-yyyy-MM-dd.log   仅 ERROR
+    SQL/slow-sql-*.log     仅慢 SQL（MyBatis 拦截器 + Druid StatFilter），> 100ms
+    seckill-yyyy-MM-dd.log 秒杀业务单独一份（便于排查超卖 / 重复下单）
+
+  滚动策略：按天分割 + 单文件 100MB 再切分（%i），保留 30 天，总量上限 3GB
+  性能：所有文件输出走 AsyncAppender，业务线程只写队列，不阻塞
+
+  外部化（JVM 参数 -D 或环境变量，优先级高于默认值）：
+    -DQP_LOG_HOME=D:/rizi1/qiangpiao        日志根目录
+    -DQP_SQL_LOG_HOME=D:/rizi1/qiangpiao/SQL 慢 SQL 目录
+    -DCONSOLE_LEVEL=INFO                 控制台/DEBUG.log 级别（生产建议 INFO）
+    -DMAX_HISTORY=30 / -DMAX_FILE_SIZE=100MB
+  注意：路径变量刻意使用 QP_ 前缀，避免被机器上已存在的 LOG_HOME 环境变量（如 D:\rizi1\IM）覆盖。
+  =============================================================================
+-->
 <configuration scan="true" scanPeriod="30 seconds">
 
-    <property name="LOG_HOME" value="${LOG_HOME:-logs}"/>
+    <!-- ==================== 变量 ==================== -->
     <property name="APP_NAME" value="qiangpiao"/>
+    <property name="LOG_HOME" value="${QP_LOG_HOME:-D:/rizi1/qiangpiao}"/>
+    <property name="SQL_LOG_HOME" value="${QP_SQL_LOG_HOME:-D:/rizi1/qiangpiao/SQL}"/>
+    <property name="CONSOLE_LEVEL" value="${CONSOLE_LEVEL:-DEBUG}"/>
+    <property name="MAX_FILE_SIZE" value="${MAX_FILE_SIZE:-100MB}"/>
+    <property name="MAX_HISTORY" value="${MAX_HISTORY:-30}"/>
+    <property name="TOTAL_SIZE_CAP" value="${TOTAL_SIZE_CAP:-3GB}"/>
+    <property name="ASYNC_QUEUE_SIZE" value="${ASYNC_QUEUE_SIZE:-4096}"/>
+    <!-- 当天日期：用于让「当前文件」名为 error-yyyy-MM-dd.log（超过 100MB 才切出 .0/.1 分片） -->
+    <timestamp key="byDay" datePattern="yyyy-MM-dd"/>
     <property name="PATTERN"
-              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"/>
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-}] [%X{orderNo:-}] [%X{userId:-}] %logger{50} - %msg%n"/>
 
     <contextName>${APP_NAME}</contextName>
 
+    <!-- 进程退出时兜底刷新异步队列，避免最后一批日志丢失 -->
+    <shutdownHook class="ch.qos.logback.core.hook.DelayingShutdownHook"/>
+
+    <!-- ==================== 1. 控制台（开发 DEBUG / 生产可降为 INFO） ==================== -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>${PATTERN}</pattern>
-            <charset>UTF-8</charset>
-        </encoder>
-    </appender>
-
-    <appender name="INFO_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_HOME}/${APP_NAME}.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>${LOG_HOME}/${APP_NAME}.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
-            <maxFileSize>100MB</maxFileSize>
-            <maxHistory>15</maxHistory>
-            <totalSizeCap>5GB</totalSizeCap>
-        </rollingPolicy>
-        <encoder>
-            <pattern>${PATTERN}</pattern>
-            <charset>UTF-8</charset>
-        </encoder>
-    </appender>
-
-    <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_HOME}/${APP_NAME}-error.log</file>
         <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
-            <level>ERROR</level>
+            <level>${CONSOLE_LEVEL}</level>
         </filter>
-        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>${LOG_HOME}/${APP_NAME}-error.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
-            <maxFileSize>100MB</maxFileSize>
-            <maxHistory>30</maxHistory>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ==================== 2. DEBUG.log（重启清空，镜像控制台） ==================== -->
+    <appender name="DEBUG_FILE" class="ch.qos.logback.core.FileAppender">
+        <!-- false = 每次启动覆盖旧文件（不追加、不滚动、不保留历史） -->
+        <append>false</append>
+        <file>${LOG_HOME}/DEBUG.log</file>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>${CONSOLE_LEVEL}</level>
+        </filter>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ==================== 3. 仅 INFO（按天滚动） ==================== -->
+    <appender name="INFO_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_HOME}/info-${byDay}.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_HOME}/info-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <!-- 精准隔离：只接收 INFO，其余级别 DENY -->
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>INFO</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+    </appender>
+
+    <!-- ==================== 4. 仅 WARN（按天滚动） ==================== -->
+    <appender name="WARN_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_HOME}/warn-${byDay}.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_HOME}/warn-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>WARN</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+    </appender>
+
+    <!-- ==================== 5. 仅 ERROR（按天滚动） ==================== -->
+    <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_HOME}/error-${byDay}.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_HOME}/error-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>ERROR</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+    </appender>
+
+    <!-- ==================== 6. 慢 SQL（单独目录，按天滚动） ==================== -->
+    <appender name="SLOW_SQL_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${SQL_LOG_HOME}/slow-sql-${byDay}.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${SQL_LOG_HOME}/slow-sql-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-}] %logger{20} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>WARN</level>
+        </filter>
+    </appender>
+
+    <!-- ==================== 7. 秒杀业务单独文件（按天滚动） ==================== -->
+    <appender name="SECKILL_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_HOME}/seckill-${byDay}.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_HOME}/seckill-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
         </rollingPolicy>
         <encoder>
             <pattern>${PATTERN}</pattern>
@@ -45,20 +163,94 @@
         </encoder>
     </appender>
 
-    <!-- 秒杀业务单独输出，方便排查超卖 / 重复下单 -->
-    <logger name="com.qiangpiao.service.impl.SeckillServiceImpl" level="INFO" additivity="false">
-        <appender-ref ref="CONSOLE"/>
+    <!-- ==================== 异步包装：文件输出全部异步，业务线程不阻塞 ==================== -->
+    <appender name="ASYNC_DEBUG_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
+        <!-- 0 = 不丢弃 WARN/ERROR，保证关键日志不丢 -->
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+        <appender-ref ref="DEBUG_FILE"/>
+    </appender>
+
+    <appender name="ASYNC_INFO_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
         <appender-ref ref="INFO_FILE"/>
+    </appender>
+
+    <appender name="ASYNC_WARN_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+        <appender-ref ref="WARN_FILE"/>
+    </appender>
+
+    <appender name="ASYNC_ERROR_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+        <appender-ref ref="ERROR_FILE"/>
+    </appender>
+
+    <appender name="ASYNC_SLOW_SQL_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>1024</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+        <appender-ref ref="SLOW_SQL_FILE"/>
+    </appender>
+
+    <appender name="ASYNC_SECKILL_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>1024</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+        <appender-ref ref="SECKILL_FILE"/>
+    </appender>
+
+    <!-- ==================== Logger 配置 ==================== -->
+
+    <!-- 慢 SQL：MyBatis 拦截器（logger: SLOW_SQL）+ Druid StatFilter 慢 SQL，
+         additivity=false → 只进 SQL 目录，不重复打到控制台 / info 文件 -->
+    <logger name="SLOW_SQL" level="WARN" additivity="false">
+        <appender-ref ref="ASYNC_SLOW_SQL_FILE"/>
+    </logger>
+    <logger name="com.alibaba.druid.filter.stat" level="WARN" additivity="false">
+        <appender-ref ref="ASYNC_SLOW_SQL_FILE"/>
     </logger>
 
-    <logger name="com.qiangpiao" level="INFO"/>
-    <logger name="org.springframework" level="WARN"/>
-    <logger name="com.alibaba.druid" level="WARN"/>
-    <logger name="org.mybatis" level="WARN"/>
+    <!-- 秒杀业务：单独一份文件；additivity=true 保证 ERROR/WARN 同时进分类文件不遗漏。
+         若只想保留单独文件、完全不进分类文件，把 additivity 改为 false -->
+    <logger name="com.qiangpiao.service.impl.SeckillServiceImpl" level="DEBUG" additivity="true">
+        <appender-ref ref="ASYNC_SECKILL_FILE"/>
+    </logger>
 
-    <root level="INFO">
+    <!-- 业务包：DEBUG（控制台 + DEBUG.log 都能看到） -->
+    <logger name="com.qiangpiao" level="DEBUG"/>
+    <logger name="com.qiangpiao.task" level="INFO"/>
+
+    <!-- 第三方框架：避免 DEBUG 风暴刷爆 DEBUG.log -->
+    <!-- logback 自身内部日志：避免配置解析过程刷进 DEBUG.log -->
+    <logger name="ch.qos.logback" level="WARN"/>
+
+    <logger name="org.springframework" level="WARN"/>
+    <logger name="org.springframework.web" level="INFO"/>
+    <logger name="org.springframework.security" level="WARN"/>
+    <logger name="org.mybatis" level="WARN"/>
+    <logger name="com.alibaba.druid.pool" level="WARN"/>
+    <logger name="io.lettuce" level="WARN"/>
+    <logger name="io.netty" level="WARN"/>
+    <logger name="org.apache.catalina" level="INFO"/>
+    <logger name="org.apache.coyote" level="INFO"/>
+    <logger name="org.apache.http" level="WARN"/>
+    <logger name="com.github.benmanes.caffeine" level="WARN"/>
+
+    <!-- Root：DEBUG 使业务/框架的 DEBUG 能进入控制台与 DEBUG.log；
+         分类文件由各自的 LevelFilter 精准隔离，不会交叉 -->
+    <root level="DEBUG">
         <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="INFO_FILE"/>
-        <appender-ref ref="ERROR_FILE"/>
+        <appender-ref ref="ASYNC_DEBUG_FILE"/>
+        <appender-ref ref="ASYNC_INFO_FILE"/>
+        <appender-ref ref="ASYNC_WARN_FILE"/>
+        <appender-ref ref="ASYNC_ERROR_FILE"/>
     </root>
 </configuration>

@@ -12,7 +12,10 @@
     </div>
 
     <div class="card-panel">
-      <el-table :data="list" v-loading="loading" border>
+      <SkeletonCard v-if="loading" :rows="4" show-table/>
+      <ErrorRetry v-else-if="errorMsg" :message="errorMsg" @retry="loadOrders"/>
+      <template v-else>
+      <el-table :data="list" border>
         <el-table-column label="订单号" prop="orderNo" min-width="200"/>
         <el-table-column label="乘车日期" width="115">
           <template #default="{ row }">{{ fmtDate(row.departTime) }}</template>
@@ -53,6 +56,7 @@
       <el-pagination class="pager" background layout="total, prev, pager, next"
                      :current-page="pageNum" :page-size="pageSize" :total="total"
                      @current-change="onPageChange"/>
+      </template>
     </div>
   </div>
 </template>
@@ -62,6 +66,8 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { queryOrders, payOrder, cancelOrder } from '@/api/order'
+import SkeletonCard from '@/components/SkeletonCard.vue'
+import ErrorRetry from '@/components/ErrorRetry.vue'
 
 const router = useRouter()
 
@@ -71,11 +77,13 @@ const total = ref(0)
 const pageNum = ref(1)
 const pageSize = ref(10)
 const status = ref(null)
+const errorMsg = ref('')
 
 onMounted(loadOrders)
 
 async function loadOrders() {
   loading.value = true
+  errorMsg.value = ''
   try {
     const data = await queryOrders({
       status: status.value,
@@ -85,7 +93,7 @@ async function loadOrders() {
     list.value = data.list || []
     total.value = data.total || 0
   } catch (e) {
-    ElMessage.error(e.message)
+    errorMsg.value = e.message || '加载订单失败'
   } finally {
     loading.value = false
   }

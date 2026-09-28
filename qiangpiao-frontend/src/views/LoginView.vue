@@ -106,6 +106,7 @@ async function submitRegister() {
 
 .login-box {
   width: 420px;
+  max-width: 92vw;
   background: #fff;
   border-radius: 10px;
   padding: 28px;

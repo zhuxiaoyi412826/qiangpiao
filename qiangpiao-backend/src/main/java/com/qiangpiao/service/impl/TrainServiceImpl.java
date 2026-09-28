@@ -47,6 +47,7 @@ public class TrainServiceImpl implements TrainService {
     private final SeatService seatService;
     private final MultiLevelCacheService cacheService;
     private final StringRedisTemplate stringRedisTemplate;
+    private final com.qiangpiao.service.PurchaseLimitService purchaseLimitService;
 
     @Value("${cache.default-ttl}")
     private long cacheTtl;
@@ -109,6 +110,19 @@ public class TrainServiceImpl implements TrainService {
         if (train.minutesToDepart(now) < stopSellMinutes) {
             throw new BizException(ResultCode.TICKET_STOP_SELL);
         }
+    }
+
+    @Override
+    public String buyBlockReason(Long userId, Long trainId) {
+        if (userId == null) {
+            return null;
+        }
+        return purchaseLimitService.buyBlockReason(userId, getTrainBO(trainId));
+    }
+
+    @Override
+    public List<com.qiangpiao.dataobject.TrainStopDO> stops(Long trainId) {
+        return trainMapper.listStops(trainId);
     }
 
     @Override

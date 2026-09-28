@@ -1,5 +1,8 @@
 <template>
-  <div class="page-container" v-loading="loading">
+  <div class="page-container">
+    <SkeletonCard v-if="loading" :rows="6"/>
+    <ErrorRetry v-else-if="errorMsg" :message="errorMsg" @retry="loadDetail"/>
+    <template v-else>
     <div class="card-panel">
       <div class="train-header">
         <div>
@@ -27,17 +30,29 @@
 
     <div class="card-panel" v-if="currentSeatMap">
       <h3>2. 选择座位<span class="muted">（不选则由系统自动分配；灰色为已售）</span></h3>
-      <div v-for="(group, carriage) in groupedSeats" :key="carriage" class="carriage">
-        <div class="muted">{{ carriage }} 号车厢</div>
-        <div class="seat-grid">
-          <div v-for="seat in group" :key="seat.seatId"
-               class="seat-item"
-               :class="seatClass(seat)"
-               @click="toggleSeat(seat)">
-            {{ seat.seatNo }}
+      <!-- 车厢默认全部折叠（打开页面 / 切换席别都会重置），展开后座位网格布局与之前一致 -->
+      <el-collapse v-model="activeCarriages">
+        <el-collapse-item v-for="g in carriageGroups" :key="g.carriageNo" :name="String(g.carriageNo)">
+          <template #title>
+            <strong>{{ g.carriageNo }} 号车厢</strong>
+            <el-tag size="small" :type="g.available > 0 ? 'success' : 'info'" style="margin-left: 8px">
+              可选 {{ g.available }} / {{ g.total }}
+            </el-tag>
+            <el-tag v-if="selectedSeat && selectedSeat.carriageNo === g.carriageNo" size="small" type="warning"
+                    style="margin-left: 8px">
+              已选 {{ selectedSeat.seatNo }}
+            </el-tag>
+          </template>
+          <div class="seat-grid">
+            <div v-for="seat in g.seats" :key="seat.seatId"
+                 class="seat-item"
+                 :class="seatClass(seat)"
+                 @click="toggleSeat(seat)">
+              {{ seat.seatNo }}
+            </div>
           </div>
-        </div>
-      </div>
+        </el-collapse-item>
+      </el-collapse>
       <div class="muted" style="margin-top: 8px">
         已选座位：{{ selectedSeatNo || '未选择（系统自动分配）' }}
         <el-button link type="primary" v-if="selectedSeatId" @click="clearSeat">取消选择</el-button>
@@ -54,10 +69,14 @@
           <el-input v-model="passenger.idCard" maxlength="18" placeholder="请输入身份证号"/>
         </el-form-item>
       </el-form>
+      <el-alert v-if="blockReason" :title="blockReason" type="warning" :closable="false" show-icon
+                style="max-width: 620px; margin-bottom: 12px"/>
       <el-button type="danger" size="large" :loading="seckilling" :disabled="!canSeckill" @click="submitSeckill">
         {{ seckillBtnText }}
       </el-button>
-      <span class="muted" style="margin-left: 12px">未登录请先登录，每人每车次每席别限购 1 张</span>
+      <span class="muted" style="margin-left: 12px">
+        未登录请先登录；每人每天每车次限购 1 张，已购车次到达（下车）后才能再次购票
+      </span>
     </div>
 
     <div class="card-panel" v-if="result">
@@ -69,6 +88,7 @@
         <el-button type="primary" @click="$router.push('/orders')">去支付</el-button>
       </div>
     </div>
+  </template>
   </div>
 </template>
 
@@ -76,7 +96,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { fetchTrainDetail } from '@/api/train'
+import { fetchTrainDetail, fetchBuyBlock } from '@/api/train'
+import SkeletonCard from '@/components/SkeletonCard.vue'
+import ErrorRetry from '@/components/ErrorRetry.vue'
 import { doSeckill, fetchSeckillResult } from '@/api/seckill'
 import { useUserStore } from '@/store/user'
 
@@ -97,7 +119,9 @@ const passenger = ref({
   idCard: ''
 })
 
-const canSeckill = computed(() => userStore.isLogin && !!seatType.value && !seckilling.value)
+const blockReason = ref('')
+const errorMsg = ref('')
+const canSeckill = computed(() => userStore.isLogin && !!seatType.value && !seckilling.value && !blockReason.value)
 const seckillBtnText = computed(() => (userStore.isLogin ? '立即抢票' : '请先登录'))
 
 const currentSeatMap = computed(() => {
@@ -107,26 +131,39 @@ const currentSeatMap = computed(() => {
   return detail.value.seatMaps.find(m => m.seatType === seatType.value) || null
 })
 
-const groupedSeats = computed(() => {
+/** 展开的车厢（空数组 = 全部折叠，默认折叠） */
+const activeCarriages = ref([])
+
+/** 按车厢号升序分组，供座位图渲染 */
+const carriageGroups = computed(() => {
   if (!currentSeatMap.value) {
-    return {}
+    return []
   }
-  const groups = {}
+  const map = new Map()
   currentSeatMap.value.seats.forEach(seat => {
-    const key = seat.carriageNo
-    if (!groups[key]) {
-      groups[key] = []
+    let group = map.get(seat.carriageNo)
+    if (!group) {
+      group = { carriageNo: seat.carriageNo, seats: [], total: 0, available: 0 }
+      map.set(seat.carriageNo, group)
     }
-    groups[key].push(seat)
+    group.seats.push(seat)
+    group.total++
+    if (seat.status === 0) {
+      group.available++
+    }
   })
-  return groups
+  return [...map.values()].sort((a, b) => a.carriageNo - b.carriageNo)
+})
+
+const selectedSeat = computed(() => {
+  if (!selectedSeatId.value || !currentSeatMap.value) {
+    return null
+  }
+  return currentSeatMap.value.seats.find(s => s.seatId === selectedSeatId.value) || null
 })
 
 const selectedSeatNo = computed(() => {
-  if (!selectedSeatId.value || !currentSeatMap.value) {
-    return ''
-  }
-  const seat = currentSeatMap.value.seats.find(s => s.seatId === selectedSeatId.value)
+  const seat = selectedSeat.value
   return seat ? `${seat.carriageNo}车${seat.seatNo}` : ''
 })
 
@@ -156,10 +193,24 @@ async function loadDetail() {
   loading.value = true
   try {
     detail.value = await fetchTrainDetail(trainId)
+    // 每次打开页面 / 刷新余票都重置为全部折叠
+    activeCarriages.value = []
     const first = (detail.value.stocks || []).find(s => s.availableCount > 0)
     if (!seatType.value && first) {
       seatType.value = first.seatType
     }
+    // 购票资格预检：每人每天每车次 1 张 + 已购车次运行时间内不可重复购票（下车后方可再买）
+    if (userStore.isLogin) {
+      try {
+        const block = await fetchBuyBlock(trainId)
+        blockReason.value = block && block.canBuy === false ? (block.reason || '当前不可购买该车次') : ''
+      } catch (e) {
+        // 预检失败不阻断购票页展示，只是少了提前提示
+        blockReason.value = ''
+      }
+    }
+  } catch (e) {
+    errorMsg.value = e.message || '加载车次详情失败'
   } finally {
     loading.value = false
   }
@@ -168,6 +219,8 @@ async function loadDetail() {
 function onSeatTypeChange() {
   selectedSeatId.value = null
   result.value = null
+  // 换席别后重新折叠所有车厢
+  activeCarriages.value = []
 }
 
 function seatClass(seat) {
@@ -213,6 +266,11 @@ async function submitSeckill() {
     pollResult()
   } catch (e) {
     result.value = { status: -1, message: e.message }
+    // 选了座位却失败（多半是座位刚被他人抢走）：清空选择并刷新座位图，方便立即重选
+    if (selectedSeatId.value) {
+      selectedSeatId.value = null
+      loadDetail()
+    }
   } finally {
     seckilling.value = false
   }
@@ -242,6 +300,7 @@ function pollResult() {
       clearInterval(timer)
       polling.value = false
       result.value = { status: -1, message: e.message || '查询抢票结果失败，请稍后重试' }
+      loadDetail()
     }
   }, 1000)
 }
@@ -261,5 +320,35 @@ function pollResult() {
 
 .carriage {
   margin-bottom: 14px;
+}
+
+/* 座位网格：在折叠面板内也显式声明，避免展开后布局退化成单列 */
+.seat-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 46px);
+  gap: 8px;
+}
+
+.seat-item {
+  height: 40px;
+  line-height: 40px;
+  text-align: center;
+  border-radius: 6px;
+  border: 1px solid #dcdfe6;
+  cursor: pointer;
+  font-size: 12px;
+  user-select: none;
+}
+
+@media (max-width: 768px) {
+  .seat-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+
+  .seat-item {
+    height: 44px;
+    line-height: 44px;
+  }
 }
 </style>

@@ -35,6 +35,23 @@ public interface TrainMapper {
      * 车次日期滚动：把发车日期早于指定日期的车次统一改到该日期（保证每天都有车次可查）。
      *
      * @return 影响行数
+     * @deprecated 已改用「按日期生成班次」{@link #selectTemplates()} + 复制库存座位，
+     * 日期滚动会让历史订单的车次日期被改写，故不再调度
      */
     int rollExpiredTrains(@Param("today") LocalDate today);
+
+    /**
+     * 车次模板：每个车次号取发车日期最早的一条，作为生成每日班次的模板（只取在售车次）。
+     */
+    List<TrainDO> selectTemplates();
+
+    /**
+     * 查询某车次在某发车日期的班次 id（生成班次前做幂等判断）。
+     */
+    Long selectIdByNoAndDate(@Param("trainNo") String trainNo, @Param("departDate") LocalDate departDate);
+
+    /**
+     * 车次时刻表：按停靠顺序返回途经站及到发时刻。
+     */
+    List<com.qiangpiao.dataobject.TrainStopDO> listStops(@Param("trainId") Long trainId);
 }

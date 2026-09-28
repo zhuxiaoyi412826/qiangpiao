@@ -75,3 +75,112 @@ html, body, #app {
     color: #fff;
     border-color: #409eff;
 }
+
+/* ==================== 移动端适配（<= 768px） ==================== */
+@media (max-width: 768px) {
+    .page-container {
+        padding: 12px 10px 32px;
+    }
+
+    .card-panel {
+        padding: 12px;
+        margin-bottom: 12px;
+        border-radius: 6px;
+    }
+
+    /* 查询表单：由横排改竖排，控件撑满宽度 */
+    .el-form--inline .el-form-item {
+        margin-right: 0;
+        margin-bottom: 10px;
+        display: block;
+    }
+
+    .el-form--inline .el-form-item__content > .el-select,
+    .el-form--inline .el-form-item__content > .el-date-editor,
+    .el-form--inline .el-form-item__content > .el-input,
+    .el-select,
+    .el-date-editor {
+        width: 100% !important;
+    }
+
+    /* 座位图：手机上 4 列更好点按 */
+    .seat-grid {
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+    }
+
+    .seat-item {
+        height: 44px;
+        line-height: 44px;
+    }
+
+    /* 表格：压缩字号与内边距，横向可滚动 */
+    .el-table {
+        font-size: 12px;
+    }
+
+    .el-table .cell {
+        padding-left: 6px;
+        padding-right: 6px;
+    }
+
+    .el-table td, .el-table th {
+        padding: 6px 0;
+    }
+
+    /* 分页：居中显示（页面里 justify-content: flex-end 会被覆盖） */
+    .el-pagination {
+        justify-content: center !important;
+        flex-wrap: wrap;
+    }
+
+    .pager {
+        justify-content: center !important;
+    }
+
+    /* 弹窗 / 抽屉在手机上铺满宽度 */
+    .el-dialog {
+        width: 92vw !important;
+        margin-top: 6vh !important;
+    }
+
+    .el-drawer {
+        width: 92vw !important;
+    }
+
+    /* 触控友好 */
+    .el-button--small {
+        padding: 9px 14px;
+    }
+
+    .el-message {
+        min-width: 80vw;
+    }
+
+    /* 席别 / 类型按钮组：窄屏自动换行，避免溢出 */
+    .el-radio-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .el-radio-group .el-radio-button {
+        flex: 0 0 auto;
+    }
+
+    /* 输入框与按钮加大触控区域 */
+    .el-input__wrapper {
+        padding: 2px 10px;
+    }
+}
+
+/* 极窄屏（<= 380px）进一步压缩 */
+@media (max-width: 380px) {
+    .train-no {
+        font-size: 16px;
+    }
+
+    .seat-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}

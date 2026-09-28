@@ -2,15 +2,18 @@
   <div class="page-container">
     <div class="card-panel">
       <el-radio-group v-model="type" size="large" @change="onTypeChange">
-        <el-radio-button label="upcoming">未开车</el-radio-button>
-        <el-radio-button label="history">历史车票</el-radio-button>
+        <el-radio-button value="upcoming">未开车</el-radio-button>
+        <el-radio-button value="history">历史车票</el-radio-button>
       </el-radio-group>
       <span class="muted type-tip">{{ typeTip }}</span>
     </div>
 
     <el-alert v-if="hint" :title="hint" type="info" :closable="false" class="hint" show-icon/>
 
-    <div v-loading="loading">
+    <div>
+      <SkeletonCard v-if="loading" :rows="4" show-table/>
+      <ErrorRetry v-else-if="errorMsg" :message="errorMsg" @retry="load"/>
+      <template v-else>
       <div v-for="t in list" :key="t.id" class="ticket-card" :class="{ 'ticket-invalid': t.ticketStatus === 3 }">
         <div class="ticket-body">
           <div class="route">
@@ -50,6 +53,7 @@
       <el-pagination v-if="total > 0" class="pager" background layout="total, prev, pager, next"
                      :current-page="pageNum" :page-size="pageSize" :total="total"
                      @current-change="onPageChange"/>
+      </template>
     </div>
   </div>
 </template>
@@ -58,6 +62,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { queryMyTickets } from '@/api/ticket'
+import SkeletonCard from '@/components/SkeletonCard.vue'
+import ErrorRetry from '@/components/ErrorRetry.vue'
 
 const loading = ref(false)
 const list = ref([])
@@ -65,6 +71,7 @@ const total = ref(0)
 const pageNum = ref(1)
 const pageSize = ref(10)
 const type = ref('upcoming')
+const errorMsg = ref('')
 
 const typeTip = computed(() => type.value === 'upcoming'
     ? '已支付且尚未发车的车票'
@@ -80,6 +87,7 @@ onMounted(load)
 
 async function load() {
   loading.value = true
+  errorMsg.value = ''
   try {
     const data = await queryMyTickets({
       type: type.value,
@@ -89,7 +97,7 @@ async function load() {
     list.value = data.list || []
     total.value = data.total || 0
   } catch (e) {
-    ElMessage.error(e.message)
+    errorMsg.value = e.message || '加载车票失败'
   } finally {
     loading.value = false
   }

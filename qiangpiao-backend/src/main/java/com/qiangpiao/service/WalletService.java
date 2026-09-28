@@ -32,6 +32,21 @@ public interface WalletService {
     BigDecimal pay(Long userId, BigDecimal amount, String bizNo, String title, String detail);
 
     /**
+     * 退款入账：退票 / 后台人工退票时把票款退回用户钱包。
+     *
+     * @param amount 退款金额（正数）
+     * @return 退款后的余额
+     */
+    BigDecimal refund(Long userId, BigDecimal amount, String bizNo, String title, String detail);
+
+    /**
+     * 平台入账：用户购票付款时，票款进入平台账户（收款方），形成闭环资金流。
+     *
+     * @return 入账后的平台余额
+     */
+    BigDecimal creditToPlatform(Long userId, BigDecimal amount, String bizNo, String title, String detail);
+
+    /**
      * 零钱流水分页。
      */
     PageResult<WalletFlowVO> pageFlows(Long userId, Integer pageNum, Integer pageSize);

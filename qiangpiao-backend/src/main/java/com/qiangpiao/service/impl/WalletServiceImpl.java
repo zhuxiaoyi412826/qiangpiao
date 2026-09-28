@@ -96,6 +96,33 @@ public class WalletServiceImpl implements WalletService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public BigDecimal refund(Long userId, BigDecimal amount, String bizNo, String title, String detail) {
+        BigDecimal back = normalize(amount);
+        getOrCreate(userId);
+        walletMapper.increaseBalance(userId, back);
+        WalletDO updated = walletMapper.selectByUserId(userId);
+        insertFlow(userId, bizNo, Constants.WALLET_FLOW_REFUND, title, detail, back, updated.getBalance(), null);
+        log.info("退票退款入账：userId={}, bizNo={}, amount={}, balance={}",
+                userId, bizNo, back, updated.getBalance());
+        return updated.getBalance();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public BigDecimal creditToPlatform(Long userId, BigDecimal amount, String bizNo, String title, String detail) {
+        BigDecimal income = normalize(amount);
+        getOrCreate(userId);
+        walletMapper.increaseBalance(userId, income);
+        WalletDO updated = walletMapper.selectByUserId(userId);
+        insertFlow(userId, bizNo, Constants.WALLET_FLOW_PLATFORM_INCOME, title, detail,
+                income, updated.getBalance(), null);
+        log.info("平台账户收款：platformUserId={}, bizNo={}, amount={}, balance={}",
+                userId, bizNo, income, updated.getBalance());
+        return updated.getBalance();
+    }
+
+    @Override
     public PageResult<WalletFlowVO> pageFlows(Long userId, Integer pageNum, Integer pageSize) {
         int pn = (pageNum == null || pageNum < 1) ? 1 : pageNum;
         int ps = (pageSize == null || pageSize < 1) ? 10 : Math.min(pageSize, 50);

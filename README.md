@@ -30,6 +30,14 @@
 
 Vue 3 + Vite + Vue Router + Pinia + Element Plus + Axios + dayjs；前端侧用 `localStorage` 做**浏览器级缓存**（车站列表、车次查询结果 30 秒）。
 
+移动端 / 弱网体验：
+
+| 能力 | 实现 |
+| --- | --- |
+| 移动端适配 | `styles/global.css` 的 `@media (max-width: 768px)`：表单竖排、控件撑满、座位图 4 列、表格压缩并横向滚动、分页居中、弹窗 92vw、按钮加大触控区；顶部导航在窄屏横向滚动（管理员 9 个模块也不挤） |
+| 骨架屏 | `components/SkeletonCard.vue`，车次列表 / 车次详情 / 我的订单 / 我的车票 / 钱包 / 退票页在 `loading` 时展示，替代空白页 |
+| 错误重试 | `components/ErrorRetry.vue` 页面级「加载失败 + 重新加载」按钮；`utils/request.js` 对**幂等 GET** 自动重试 2 次（400ms/800ms 退避），仅在网络中断 / 超时 / 5xx 时触发，**POST 下单与支付绝不重试**避免重复下单 |
+
 ### 为什么必须用 Tomcat 9.x
 
 项目使用 `javax.servlet-api 4.0.1`，而 **Tomcat 10+ 已切换为 `jakarta.*` 命名空间**，使用 10.x 会直接 `ClassNotFoundException` / `NoSuchMethodError`。请务必下载 Tomcat **9.0.x**。
@@ -115,6 +123,29 @@ mysql -uroot -p qiangpiao < data.sql
 ```
 
 `data.sql` 会写入：10 个车站、3 个用户、6 个车次、三档席别库存，并按真实座位数校准库存。
+
+### 1.1 导入全量车站与公开高铁线路车次（可选但推荐）
+
+```bash
+cd 项目根目录
+node scripts/import-data.js          # 生成 SQL：scripts/sql/*.sql
+mysql -uroot -p qiangpiao < scripts/sql/stations_import.sql   # 3396 个车站（12306 station_names）
+mysql -uroot -p qiangpiao < scripts/sql/trains_import.sql     # 15 条高铁线路 / 72 个车次模板
+mysql -uroot -p qiangpiao < scripts/sql/future_dates_import.sql  # 复制出未来 13 天班次
+```
+
+脚本说明：
+
+| 环节 | 数据来源 | 产出 |
+| --- | --- | --- |
+| 车站 | `md/数据.js`（12306 `station_names` 全量） | `t_station` 3396 个车站（站名 / 城市 / 拼音简码，`INSERT IGNORE` 去重） |
+| 线路 | 内置 15 条公开高铁（京沪、京广、沪昆、京哈、徐兰、成渝、广深港、杭深、京津、沪宁、京张、合福、宁杭、济青、西成） | `t_line` + `t_line_station` 线路与途经站 |
+| 车次 | 每条线路按真实号段生成上下行与区段车次（G1/G2…、D3101、C2001） | `t_train` 模板 + `t_train_stock` 三档席别 + `t_seat` 800 座/车次 + `t_carriage` 8 节车厢 + `t_train_stop` 途经站时刻 |
+| 未来班次 | 以模板复制 | 未来 13 天班次（库存、座位同步复制） |
+
+- 脚本只生成 SQL，不连数据库；全部语句幂等（`INSERT IGNORE` / `NOT EXISTS`），可重复执行。
+- 只需插入「今天」的模板班次，`TrainScheduleTask` 会以最早一天为模板自动补齐到 30 天（启动 10s 执行一次，之后每小时一次）。
+- 修改线路/车次：编辑 `scripts/import-data.js` 中的 `LINES` 配置后重新生成即可。
 
 ### 2. 修改后端配置
 
@@ -375,7 +406,7 @@ flowchart TB
 | 车站全量 | `qp:cache:station:all` | 300s |
 | 座位图 | `qp:cache:seat:map:{trainId}:{seatType}` | 120s |
 | 秒杀库存 | `qp:seckill:stock:{trainId}:{seatType}` | 预热 12h |
-| 一人一单 | `qp:seckill:user:{trainId}:{seatType}:{userId}` | 30min |
+| 限购标记 | `qp:seckill:user:{trainId}:{userId}` | 30min |
 | 抢票结果 | `qp:seckill:result:{trainId}:{seatType}:{userId}` | 30min |
 | 接口限流 | `qp:limit:user:{userId}` | 60s |
 
@@ -434,10 +465,16 @@ sequenceDiagram
 ### 6.4 秒杀抢票流程
 
 1. **限流**：`INCR qp:limit:user:{userId}`，超过 `seckill.user-limit`（默认 20 次/分钟）→ `429`
-2. **一人一单**：`SETNX qp:seckill:user:{trainId}:{seatType}:{userId}`（30min），失败 → `3003 请勿重复抢票`
+2. **限购标记**：`SETNX qp:seckill:user:{trainId}:{userId}`（30min，**不分席别**），失败 → `3006 每人每天每车次限购 1 张`
    - **DB 兜底**：Redis 标记 30min 过期后同步层就失去限购能力，因此紧接着再查一次
-     `t_seckill_record(train_id, seat_type, user_id)`，命中同样抛 `3003`（取消/退票会删除该记录，故取消后可重买）
+     `t_seckill_record(train_id, seat_type, user_id)`，命中抛 `3003`（取消/退票会删除该记录，故取消后可重买）
 3. **车次校验**：三级缓存取车次，判断是否在售；不可售则回滚步骤 2 的标记
+3.1 **限购规则（以订单表为准，`PurchaseLimitService`）**：
+   - **每人每天每车次限购 1 张**：`t_order` 按 `(train_id, user_id)` 统计有效订单（0 待支付 / 1 已支付），已有则 `3006`；
+     `train_id` 本身即「某一天的实际班次」（`uk_train_no_date`），故天然满足「每天每车次」
+   - **行程运行时间内不可重复购票**：已购有效订单的运行区间 `[发车时刻, 到达时刻]` 与目标车次区间重叠 → `3007`，
+     必须等已购车次到达（下车）后才能再买；跨天到达用 `arrive_time <= depart_time` 判定并 +1 天
+   - 异步落库（`createSeckillOrder`）开头再校验一次，作为并发下的最后兜底，失败进补偿流程并把原因回写给前端
 4. **Lua 原子预扣库存**：`qp:seckill:stock:{trainId}:{seatType}`
 
    ```lua
@@ -563,8 +600,13 @@ sequenceDiagram
 
 - `StockPreheatTask`：启动后预热 / 校准 Redis 秒杀库存
 - `OrderTimeoutTask`：扫描超时未支付订单并关闭（归还座位与库存）
-- `TrainDateRollTask`：**车次日期滚动**，启动 5 秒后 + 每小时执行，把已发车的车次挪到它的下一班次
-  （今天该时刻还没过就保持在今天，否则顺延到明天），保证任何时刻都能查到未发车车次
+- `TrainScheduleTask`：**按日期生成班次**（车次模板 → 每日实际班次），启动 10 秒后 + 每小时执行。
+  以「每个车次号最早且已配置库存/座位的记录」为模板，为今天起 `ticket.query-days`（默认 30）天批量复制班次
+  （含各席别库存与座位图，余量重置为总量），保证**每天都有车次可查询、可发车、可售卖**
+  - 幂等依赖 `uk_train_no_date`：已存在该日期班次则跳过，重复执行无副作用
+  - 生成后失效车次列表 / 详情缓存
+  - 旧方案 `TrainDateRollTask`（把已发车车次日期整体滚动到明天）已废弃删除：它会让历史订单的车次日期被改写，
+    且同一时刻只存在一天的班次，导致「今天查不到票、明天之后也没有票」
 
 ### 6.7 售票规则与时间窗
 
@@ -576,11 +618,36 @@ sequenceDiagram
 | 只查未发车车次 | — | `TrainMapper` 的 `Not_Departed_Condition` | `depart_date > CURDATE() OR (depart_date = CURDATE() AND depart_time > NOW())`，列表与 count 同条件 |
 | 预售期 | `ticket.presale-days=14` | 秒杀校验 | 发车日期超过「今天+14 天」返回 `TICKET_NOT_ON_SALE` |
 | 开车前停售 | `ticket.stop-sell-minutes=20` | 秒杀校验 | 距发车不足 20 分钟返回 `TICKET_STOP_SELL` |
-| 禁止购买已发车 | — | 秒杀校验 | 发车时刻已过返回 `TRAIN_DEPARTED`；同时释放已占的一人一单标记，避免用户改期重试被误判为重复抢票 |
+| 禁止购买已发车 | — | 秒杀校验 | 发车时刻已过返回 `TRAIN_DEPARTED`；同时释放已占的限购标记，避免用户改期重试被误判为重复抢票 |
+| 每人每天每车次限购 1 张 | — | `PurchaseLimitService` | `t_order` 按 `(train_id, user_id)` 统计有效订单（待支付/已支付），已有则 `3006`，不分席别 |
+| 行程运行时间内不可再买 | — | `PurchaseLimitService` | 已购有效订单区间 `[发车, 到达]` 与目标区间重叠则 `3007`，需等下车（到达）后才能再买 |
+| 购票资格预检 | `GET /api/trains/{trainId}/buy-block` | `TrainServiceImpl.buyBlockReason` | 前端进详情页即提示原因并禁用抢票按钮，避免无意义请求 |
 
 列表出参 `TrainVO` 额外返回 `sellable` 与 `sellTip`（「已发车 / 预售期尚未开始 / 开车前 20 分钟停止售票」），前端据此禁用抢票按钮，不必等到下单才报错。
 
-**订单乘车日期快照**：车次日期会被 `TrainDateRollTask` 滚动，如果订单直接读 `t_train.depart_date`，历史订单的日期会被改写。因此 `t_order` 增加 `depart_date` 列，下单时把当时的乘车日期写入订单；订单详情、订单列表、我的车票统一以该快照为准（老数据已按 `train_id` 回填）。
+**订单乘车日期快照**：班次按日期生成后，同一车次号会有很多天的班次记录，如果订单直接读 `t_train.depart_date`，容易与订单当时的乘车日期混淆。因此 `t_order` 增加 `depart_date` 列，下单时把当时的乘车日期写入订单；订单详情、订单列表、我的车票统一以该快照为准（老数据已按 `train_id` 回填）。
+
+**可查询 vs 可购买**：查询范围 `ticket.query-days=30` 天（前端日期选择器同步限制），购买范围 `ticket.presale-days=14` 天。超出预售期的班次在列表里照常展示，但 `sellable=false`、`sellTip="预售期尚未开始"`。
+
+### 6.8 日志（Logback）
+
+配置文件：`qiangpiao-backend/src/main/resources/logback.xml`（可通过 `-Dlogback.configurationFile=...` 覆盖）。
+
+| 输出 | 文件 | 级别 / 说明 |
+| --- | --- | --- |
+| 控制台 | — | `CONSOLE_LEVEL` 控制，默认 DEBUG；生产加 `-DCONSOLE_LEVEL=INFO` 降级 |
+| 全量镜像 | `D:\rizi1\qiangpiao\DEBUG.log` | FileAppender，`append=false` → **每次重启清空重写**，输出 DEBUG 及以上，与控制台同内容 |
+| 分类 | `info-yyyy-MM-dd.log` / `warn-yyyy-MM-dd.log` / `error-yyyy-MM-dd.log` | `LevelFilter` 精准隔离，只收对应级别，互不交叉；按天滚动 + 单文件 100MB 再切分（`.0`/`.1`），保留 30 天 |
+| 慢 SQL | `D:\rizi1\qiangpiao\SQL\slow-sql-yyyy-MM-dd.log` | MyBatis 拦截器（logger `SLOW_SQL`）+ Druid `StatFilter`，耗时 > `sql.slow-threshold-ms`（默认 100ms） |
+| 秒杀 | `seckill-yyyy-MM-dd.log` | 秒杀业务单独一份，便于排查超卖 / 重复下单 |
+
+要点：
+
+- **异步**：所有文件输出经 `AsyncAppender`（队列 4096，`discardingThreshold=0` 不丢 WARN/ERROR），业务线程只写队列；`DelayingShutdownHook` 保证退出前刷盘
+- **不重复**：慢 SQL / Druid 慢日志 `additivity=false`；同一个 appender 不会被多个 logger 重复引用
+- **根 logger**：`DEBUG`（业务包 `com.qiangpiao` 为 DEBUG，Spring / MyBatis / Druid / Lettuce / logback 自身限制为 WARN，避免 DEBUG 风暴）
+- **慢 SQL 拦截**：`SlowSqlInterceptor` 挂在 `SqlSessionFactory` 的 plugins 上，记录耗时并把 `?` 替换为真实参数，格式化失败也不影响业务
+- **路径外部化**：`-DQP_LOG_HOME=...`、`-DQP_SQL_LOG_HOME=...`（用 `QP_` 前缀，避免被机器上已存在的 `LOG_HOME` 环境变量覆盖）；`-DMAX_HISTORY`、`-DMAX_FILE_SIZE` 同样可覆盖
 
 ---
 
@@ -648,6 +715,31 @@ sequenceDiagram
 - 待支付订单不属于车票，需先到「我的订单」完成支付
 
 返回字段额外给出 `ticketStatus`（1 待出行 / 2 已出行 / 3 已失效）、`ticketStatusText`、`departed`、`daysFromNow`（距发车天数，前端据此显示「今天发车 / 明天发车 / 还有 N 天发车」）。
+
+### 管理后台 `/api/admin`（需 ROLE_ADMIN）
+
+| 模块 | 接口 |
+| --- | --- |
+| 车站 | `GET/POST /admin/stations`、`PUT /admin/stations/{id}/status`（停用/启用） |
+| 线路 | `GET/POST /admin/lines`、`DELETE /admin/lines/{id}`、`GET/POST /admin/lines/{lineId}/stations`（途经站与顺序） |
+| 车次 | `GET /admin/trains`、`PUT /admin/trains/{id}/status`（停开某天班次）、`GET/POST /admin/trains/{id}/stops`（时刻表）、`GET/POST /admin/trains/{id}/carriages`（车厢）、`POST /admin/trains/{id}/schedule?date=`（按日期生成当日班次） |
+| 票价 | `PUT /admin/stocks/{id}/price`、`PUT /admin/stocks/{id}/total` |
+| 订单 | `GET /admin/orders`（订单号/手机号/状态/日期筛选）、`GET /admin/orders/{orderNo}`、`GET /admin/orders/{orderNo}/logs`、`GET /admin/orders/{orderNo}/changes`、`POST /admin/orders/{orderNo}/refund`（人工退票） |
+| 用户 | `GET /admin/users`、`PUT /admin/users/{id}/status`（封禁/解封） |
+| 公告 | `GET/POST /admin/announcements`、`DELETE /admin/announcements/{id}`；前台 `GET /api/announcements` 免登录 |
+| 监控 | `GET /admin/monitor/stock`（余票）、`GET /admin/monitor/locked-seats`（锁票） |
+| 报表 | `GET /admin/stats`、`/daily-sales`、`/train-sales`、`/user-growth`、`GET /admin/stats/export?type=`（导出 CSV，Excel 可直接打开） |
+
+### 退票 / 改签 `/api/after-sale`
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/after-sale/refund` | 退票：限已支付且未发车，释放座位、归还库存、票款退回钱包 |
+| POST | `/api/after-sale/change` | 改签：换到未发车且有余票的车次，差额多退少补 |
+| GET | `/api/after-sale/{orderNo}/timeline` | 订单流转时间轴 |
+| GET | `/api/after-sale/{orderNo}/changes` | 改签历史 |
+
+**车次模板与每日班次**：`t_train` 每行是「某一天的实际班次」，`POST /admin/trains/{id}/schedule` 以指定班次为模板复制（车型、时刻、库存、座位）生成新日期班次，实现「模板 + 每日排班」分离；`TrainScheduleTask` 每小时自动为今天起 30 天补齐班次，保证每天都有车次可查可买（购买仍受 14 天预售期限制）。
 
 ### 钱包 `/api/wallet`
 

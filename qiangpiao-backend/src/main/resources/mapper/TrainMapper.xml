@@ -86,6 +86,41 @@
         WHERE TIMESTAMP(depart_date, depart_time) &lt;= NOW()
     </update>
 
+    <!--
+      车次模板：每个车次号「最早一天且已配置库存/座位」的记录，作为按日期生成每日班次的母本。
+      必须带 EXISTS(t_train_stock) 条件，否则会选中刚生成、尚未复制库存与座位的空班次。
+    -->
+    <select id="selectTemplates" resultType="com.qiangpiao.dataobject.TrainDO">
+        SELECT
+        t.id, t.train_no, t.train_type, t.from_station_id, t.from_station_name, t.to_station_id, t.to_station_name,
+        t.depart_date, t.depart_time, t.arrive_time, t.duration_minutes, t.status, t.create_time, t.update_time
+        FROM t_train t
+                 JOIN (SELECT x.train_no, MIN(x.depart_date) AS min_date
+                       FROM t_train x
+                       WHERE EXISTS (SELECT 1 FROM t_train_stock s WHERE s.train_id = x.id)
+                       GROUP BY x.train_no) m
+                      ON t.train_no = m.train_no AND t.depart_date = m.min_date
+        WHERE t.status = 1
+        ORDER BY t.train_no
+    </select>
+
+    <select id="selectIdByNoAndDate" resultType="java.lang.Long">
+        SELECT id
+        FROM t_train
+        WHERE train_no = #{trainNo}
+          AND depart_date = #{departDate}
+        LIMIT 1
+    </select>
+
+    <!-- 车次时刻表（站点时序）：按停靠顺序 -->
+    <select id="listStops" resultType="com.qiangpiao.dataobject.TrainStopDO">
+        SELECT id, train_id, station_id, station_name, stop_order,
+               arrive_time, depart_time, stop_minutes, distance_km
+        FROM t_train_stop
+        WHERE train_id = #{trainId}
+        ORDER BY stop_order
+    </select>
+
     <insert id="insert" parameterType="com.qiangpiao.dataobject.TrainDO"
             useGeneratedKeys="true" keyProperty="id">
         INSERT INTO t_train (train_no, train_type, from_station_id, from_station_name, to_station_id, to_station_name,

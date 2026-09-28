@@ -57,6 +57,26 @@ public class TrainBO implements Serializable {
         return departAt == null || !departAt.isAfter(now);
     }
 
+    /**
+     * 到达时刻（日期 + 时间）；到达时间不晚于发车时间时视为次日到达，自动 +1 天。
+     */
+    public LocalDateTime arriveAt() {
+        if (departDate == null || arriveTime == null) {
+            return null;
+        }
+        LocalDateTime arrive = LocalDateTime.of(departDate, arriveTime);
+        if (departTime != null && !arriveTime.isAfter(departTime)) {
+            arrive = arrive.plusDays(1);
+        }
+        return arrive;
+    }
+
+    /** 是否已到达终点（下车）：用于判断用户行程是否结束 */
+    public boolean arrived(LocalDateTime now) {
+        LocalDateTime arriveAt = arriveAt();
+        return arriveAt == null || !arriveAt.isAfter(now);
+    }
+
     /** 距发车还剩多少分钟（时刻缺失时返回 Long.MAX_VALUE） */
     public long minutesToDepart(LocalDateTime now) {
         LocalDateTime departAt = departAt();

@@ -43,4 +43,15 @@ public interface TrainService {
      * 售票规则集中在车次服务里，秒杀链路复用同一套判定。
      */
     void assertTicketSellable(Long trainId);
+
+    /**
+     * 购票资格预检：返回不能购买的原因（限购 / 行程运行时间冲突），null 表示可以购买。
+     * 供前端在点击抢票前提示用户，避免无意义的请求。
+     */
+    String buyBlockReason(Long userId, Long trainId);
+
+    /**
+     * 车次时刻表（站点时序）：按停靠顺序返回途经站及到发时刻。
+     */
+    java.util.List<com.qiangpiao.dataobject.TrainStopDO> stops(Long trainId);
 }

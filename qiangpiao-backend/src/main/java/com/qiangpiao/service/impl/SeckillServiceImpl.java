@@ -15,6 +15,7 @@ import com.qiangpiao.mapper.SeckillRecordMapper;
 import com.qiangpiao.mapper.TrainMapper;
 import com.qiangpiao.mapper.TrainStockMapper;
 import com.qiangpiao.service.OrderService;
+import com.qiangpiao.service.PurchaseLimitService;
 import com.qiangpiao.service.SeckillService;
 import com.qiangpiao.service.TrainService;
 import com.qiangpiao.vo.SeckillResultVO;
@@ -70,6 +71,7 @@ public class SeckillServiceImpl implements SeckillService {
     private final TrainStockMapper trainStockMapper;
     private final TrainMapper trainMapper;
     private final SeckillRecordMapper seckillRecordMapper;
+    private final PurchaseLimitService purchaseLimitService;
 
     @Qualifier("seckillExecutor")
     private final Executor seckillExecutor;
@@ -92,12 +94,12 @@ public class SeckillServiceImpl implements SeckillService {
             throw new BizException(ResultCode.TOO_MANY_REQUESTS);
         }
 
-        // ---------- 2. 一人一单 ----------
-        String userKey = RedisKeys.seckillUser(trainId, seatType, userId);
+        // ---------- 2. 限购标记：每人每天每车次 1 张（不分席别，Redis SETNX 快速拦截） ----------
+        String userKey = RedisKeys.seckillUser(trainId, userId);
         Boolean absent = stringRedisTemplate.opsForValue()
                 .setIfAbsent(userKey, "1", USER_MARK_MINUTES, TimeUnit.MINUTES);
         if (!Boolean.TRUE.equals(absent)) {
-            throw new BizException(ResultCode.SECKILL_REPEAT);
+            throw new BizException(ResultCode.BUY_LIMIT_PER_TRAIN);
         }
 
         // ---------- 2.1 一人一单 DB 兜底 ----------
@@ -120,7 +122,17 @@ public class SeckillServiceImpl implements SeckillService {
         try {
             trainService.assertTicketSellable(trainId);
         } catch (RuntimeException e) {
-            // 不可购票时释放一人一单标记，避免用户换个时间点重试被误判为重复抢票
+            // 不可购票时释放限购标记，避免用户换个时间点重试被误判为重复抢票
+            stringRedisTemplate.delete(userKey);
+            throw e;
+        }
+
+        // ---------- 3.1 限购规则 ----------
+        // 规则一：每人每天每车次限购 1 张（不分席别，DB 为准）
+        // 规则二：已购车次处于运行时间内（发车~到达）不能重复购票，必须等下车（到达）后才行
+        try {
+            purchaseLimitService.assertCanBuy(userId, trainBO);
+        } catch (RuntimeException e) {
             stringRedisTemplate.delete(userKey);
             throw e;
         }
@@ -286,7 +298,7 @@ public class SeckillServiceImpl implements SeckillService {
     private void compensate(SeckillTaskBO taskBO, String reason) {
         try {
             rollbackStock(taskBO.getTrainId(), taskBO.getSeatType());
-            stringRedisTemplate.delete(RedisKeys.seckillUser(taskBO.getTrainId(), taskBO.getSeatType(), taskBO.getUserId()));
+            stringRedisTemplate.delete(RedisKeys.seckillUser(taskBO.getTrainId(), taskBO.getUserId()));
             // 把失败原因写回结果 key（而不是直接删除），让前端轮询时能拿到明确提示
             stringRedisTemplate.opsForValue().set(
                     RedisKeys.seckillResult(taskBO.getTrainId(), taskBO.getSeatType(), taskBO.getUserId()),

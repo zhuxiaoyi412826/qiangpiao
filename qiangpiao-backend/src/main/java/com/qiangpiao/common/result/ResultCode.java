@@ -47,6 +47,10 @@ public enum ResultCode {
     SECKILL_REPEAT(3003, "请勿重复抢票"),
     SECKILL_FAILED(3004, "抢票失败，请重试"),
     ORDER_QUEUEING(3005, "排队中，请稍后查询结果"),
+    /** 限购：每人每天每车次 1 张 */
+    BUY_LIMIT_PER_TRAIN(3006, "每人每天每车次限购 1 张"),
+    /** 限购：已购车次的运行时间（发车~到达）内不能重复购票 */
+    TRIP_TIME_CONFLICT(3007, "您已购买的车次仍在运行时间内，下车后才能再次购票"),
 
     /* ========== 订单 4000+ ========== */
     ORDER_NOT_FOUND(4001, "订单不存在"),

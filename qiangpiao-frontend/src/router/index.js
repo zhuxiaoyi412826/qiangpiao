@@ -34,6 +34,24 @@ const routes = [
         meta: { title: '我的车票', requiresAuth: true }
     },
     {
+        path: '/refund',
+        name: 'Refund',
+        component: () => import('@/views/RefundView.vue'),
+        meta: { title: '退票 / 改签', requiresAuth: true }
+    },
+    {
+        path: '/orders/:orderNo',
+        name: 'OrderDetail',
+        component: () => import('@/views/OrderDetailView.vue'),
+        meta: { title: '订单详情', requiresAuth: true }
+    },
+    {
+        path: '/admin',
+        name: 'Admin',
+        component: () => import('@/views/AdminView.vue'),
+        meta: { title: '管理后台', requiresAuth: true }
+    },
+    {
         path: '/wallet',
         name: 'Wallet',
         component: () => import('@/views/WalletView.vue'),

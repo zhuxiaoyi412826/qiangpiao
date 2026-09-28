@@ -4,14 +4,25 @@
       <div class="header-inner">
         <div class="logo" @click="$router.push('/trains')">抢票系统</div>
         <el-menu :default-active="activeMenu" mode="horizontal" :router="true" class="nav-menu">
-          <el-menu-item index="/trains">车次查询</el-menu-item>
-          <el-menu-item index="/orders">我的订单</el-menu-item>
-          <el-menu-item index="/wallet">我的钱包</el-menu-item>
-          <el-menu-item index="/profile">个人中心</el-menu-item>
+          <!-- 管理员：后台各管理模块平铺到顶部导航 -->
+          <template v-if="isAdmin">
+            <el-menu-item v-for="m in adminMenus" :key="m.tab" :index="'/admin?tab=' + m.tab">
+              {{ m.label }}
+            </el-menu-item>
+          </template>
+          <!-- 普通用户 -->
+          <template v-else>
+            <el-menu-item index="/trains">车次查询</el-menu-item>
+            <el-menu-item index="/orders">我的订单</el-menu-item>
+            <el-menu-item index="/tickets">我的车票</el-menu-item>
+            <el-menu-item index="/refund">退票/改签</el-menu-item>
+            <el-menu-item index="/wallet">我的钱包</el-menu-item>
+            <el-menu-item index="/profile">个人中心</el-menu-item>
+          </template>
         </el-menu>
         <div class="header-right">
           <template v-if="userStore.isLogin">
-            <span class="muted">你好，{{ userStore.username }}</span>
+            <span class="muted greeting">你好，{{ userStore.username }}</span>
             <el-button link type="primary" @click="handleLogout">退出</el-button>
           </template>
           <el-button v-else type="primary" size="small" @click="$router.push('/login')">登录 / 注册</el-button>
@@ -43,7 +54,33 @@ const router = useRouter()
 const userStore = useUserStore()
 const stationStore = useStationStore()
 
-const activeMenu = computed(() => '/' + (route.path.split('/')[1] || 'trains'))
+// 只有 ROLE_ADMIN 才显示后台管理菜单（平铺到顶部导航）
+const isAdmin = computed(() => {
+  const roles = userStore.userInfo && userStore.userInfo.roles
+  if (!roles) return false
+  const list = Array.isArray(roles) ? roles : [roles]
+  return list.some(r => String(r).toUpperCase().includes('ADMIN'))
+})
+
+// 后台管理模块：与 AdminView 内的 tab 一一对应
+const adminMenus = [
+  { tab: 'stats', label: '运营概览' },
+  { tab: 'stations', label: '车站管理' },
+  { tab: 'lines', label: '线路管理' },
+  { tab: 'trains', label: '车次管理' },
+  { tab: 'price', label: '票价 / 库存' },
+  { tab: 'orders', label: '订单管理' },
+  { tab: 'users', label: '用户管理' },
+  { tab: 'notice', label: '公告管理' },
+  { tab: 'monitor', label: '票务监控' }
+]
+
+const activeMenu = computed(() => {
+  if (isAdmin.value) {
+    return '/admin?tab=' + (route.query.tab || 'stats')
+  }
+  return '/' + (route.path.split('/')[1] || 'trains')
+})
 
 onMounted(() => {
   // 预加载车站（前端缓存优先）
@@ -114,5 +151,47 @@ function handleLogout() {
 .app-footer {
   text-align: center;
   padding: 16px 0;
+}
+
+/* 移动端：菜单横向滚动（管理员 9 个模块也不会挤爆），头部紧凑 */
+@media (max-width: 768px) {
+  .header-inner {
+    padding: 0 10px;
+    gap: 10px;
+  }
+
+  .logo {
+    font-size: 17px;
+  }
+
+  .greeting {
+    display: none;
+  }
+
+  .nav-menu {
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .nav-menu::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-menu :deep(.el-menu-item) {
+    flex: 0 0 auto;
+    padding: 0 12px;
+    font-size: 14px;
+  }
+
+  .app-header {
+    height: 54px;
+  }
+
+  .header-inner {
+    height: 54px;
+  }
 }
 </style>
