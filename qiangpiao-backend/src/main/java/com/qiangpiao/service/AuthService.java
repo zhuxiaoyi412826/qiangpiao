@@ -27,6 +27,13 @@ public interface AuthService {
     UserVO currentUser(Long userId);
 
     /**
+     * 登出：把当前 token 拉黑，立即失效（JWT 本身无法作废，靠黑名单实现）。
+     *
+     * @param token 原始 token（不带 Bearer 前缀）
+     */
+    void logout(String token);
+
+    /**
      * 登录用户业务对象（供其他 Service 调用）
      */
     LoginUserBO getLoginUserBO(Long userId);

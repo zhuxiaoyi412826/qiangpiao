@@ -4,16 +4,27 @@
 <mapper namespace="com.qiangpiao.mapper.SeckillRecordMapper">
 
     <insert id="insertIgnore" parameterType="com.qiangpiao.dataobject.SeckillRecordDO">
-        INSERT IGNORE INTO t_seckill_record (train_id, seat_type, user_id, order_no, create_time)
-        VALUES (#{trainId}, #{seatType}, #{userId}, #{orderNo}, NOW())
+        INSERT IGNORE INTO t_seckill_record (train_id, seat_type, user_id, order_no, id_card, create_time)
+        VALUES (#{trainId}, #{seatType}, #{userId}, #{orderNo}, #{idCard}, NOW())
     </insert>
 
     <select id="selectByUserAndTrain" resultType="com.qiangpiao.dataobject.SeckillRecordDO">
-        SELECT id, train_id, seat_type, user_id, order_no, create_time
+        SELECT id, train_id, seat_type, user_id, order_no, id_card, create_time
         FROM t_seckill_record
         WHERE train_id = #{trainId}
           AND seat_type = #{seatType}
           AND user_id = #{userId}
+        LIMIT 1
+    </select>
+
+    <!-- 同一用户 + 同一车次 + 同一席别 + 同一乘车人：已买过则不可重复购票 -->
+    <select id="selectByUserTrainAndIdCard" resultType="com.qiangpiao.dataobject.SeckillRecordDO">
+        SELECT id, train_id, seat_type, user_id, order_no, id_card, create_time
+        FROM t_seckill_record
+        WHERE train_id = #{trainId}
+          AND seat_type = #{seatType}
+          AND user_id = #{userId}
+          AND id_card = #{idCard}
         LIMIT 1
     </select>
 

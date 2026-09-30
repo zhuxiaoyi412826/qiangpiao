@@ -7,6 +7,7 @@ import com.qiangpiao.dto.ChangeDTO;
 import com.qiangpiao.dto.RefundDTO;
 import com.qiangpiao.common.util.SecurityUtils;
 import com.qiangpiao.service.AfterSaleService;
+import com.qiangpiao.vo.AfterSalePreviewVO;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -44,6 +46,22 @@ public class RefundController {
         Long userId = SecurityUtils.currentUserId();
         afterSaleService.change(dto.getOrderNo(), userId, dto.getNewTrainId(), dto.getSeatType(), dto.getReason());
         return R.ok(true);
+    }
+
+    @GetMapping("/{orderNo}/refund-preview")
+    @ApiOperation("退票费用试算：票价 / 手续费 / 实退金额 / 计费档位")
+    public R<AfterSalePreviewVO> refundPreview(@PathVariable String orderNo) {
+        Long userId = SecurityUtils.currentUserId();
+        return R.ok(afterSaleService.previewRefund(orderNo, userId));
+    }
+
+    @GetMapping("/{orderNo}/change-preview")
+    @ApiOperation("改签费用试算：差额 / 手续费 / 实退或实补")
+    public R<AfterSalePreviewVO> changePreview(@PathVariable String orderNo,
+                                               @RequestParam Long newTrainId,
+                                               @RequestParam Integer seatType) {
+        Long userId = SecurityUtils.currentUserId();
+        return R.ok(afterSaleService.previewChange(orderNo, userId, newTrainId, seatType));
     }
 
     @GetMapping("/{orderNo}/timeline")

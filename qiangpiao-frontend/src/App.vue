@@ -2,16 +2,18 @@
   <div class="app-wrapper">
     <el-header class="app-header">
       <div class="header-inner">
-        <div class="logo" @click="$router.push('/trains')">抢票系统</div>
+        <div class="logo" @click="$router.push('/home')">抢票系统</div>
         <el-menu :default-active="activeMenu" mode="horizontal" :router="true" class="nav-menu">
           <!-- 管理员：后台各管理模块平铺到顶部导航 -->
           <template v-if="isAdmin">
+            <el-menu-item index="/home">首页</el-menu-item>
             <el-menu-item v-for="m in adminMenus" :key="m.tab" :index="'/admin?tab=' + m.tab">
               {{ m.label }}
             </el-menu-item>
           </template>
           <!-- 普通用户 -->
           <template v-else>
+            <el-menu-item index="/home">首页</el-menu-item>
             <el-menu-item index="/trains">车次查询</el-menu-item>
             <el-menu-item index="/orders">我的订单</el-menu-item>
             <el-menu-item index="/tickets">我的车票</el-menu-item>
@@ -72,10 +74,14 @@ const adminMenus = [
   { tab: 'orders', label: '订单管理' },
   { tab: 'users', label: '用户管理' },
   { tab: 'notice', label: '公告管理' },
-  { tab: 'monitor', label: '票务监控' }
+  { tab: 'monitor', label: '票务监控' },
+  { tab: 'risk', label: '风控管理' }
 ]
 
 const activeMenu = computed(() => {
+  if (route.path === '/home') {
+    return '/home'
+  }
   if (isAdmin.value) {
     return '/admin?tab=' + (route.query.tab || 'stats')
   }
@@ -92,8 +98,8 @@ onMounted(() => {
 
 function handleLogout() {
   ElMessageBox.confirm('确定退出登录吗？', '提示', { type: 'warning' })
-      .then(() => {
-        userStore.logout()
+      .then(async () => {
+        await userStore.logout()
         router.push('/login')
       })
       .catch(() => {

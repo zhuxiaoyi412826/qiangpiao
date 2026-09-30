@@ -25,6 +25,23 @@
         LIMIT 1
     </select>
 
+    <!-- 并发安全取座：FOR UPDATE 锁住选中行直到事务提交，SKIP LOCKED 让并发事务跳过彼此已锁的行。
+         批量抢票（一次多张）时各任务因此拿到的是不同座位，而不是都盯着同一行互相撞锁。 -->
+    <select id="selectAvailableForUpdate" resultType="com.qiangpiao.dataobject.SeatDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_seat
+        WHERE train_id = #{trainId}
+          AND seat_type = #{seatType}
+          AND status = 0
+        <if test="carriageNo != null">
+            AND carriage_no = #{carriageNo}
+        </if>
+        ORDER BY carriage_no, seat_no
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+    </select>
+
     <select id="selectByTrainId" resultType="com.qiangpiao.dataobject.SeatDO">
         SELECT
         <include refid="Base_Column_List"/>

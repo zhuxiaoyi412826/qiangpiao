@@ -1,5 +1,6 @@
 package com.qiangpiao.service;
 
+import com.qiangpiao.bo.RangeBO;
 import com.qiangpiao.bo.SeatBO;
 import com.qiangpiao.vo.SeatMapVO;
 
@@ -14,6 +15,12 @@ public interface SeatService {
     SeatMapVO seatMap(Long trainId, Integer seatType);
 
     /**
+     * 按乘车区间取座位图：只有「本区间已被占用」的座位不可选，
+     * 该座位其它区间被占用不影响本次购买（区间复用）。
+     */
+    SeatMapVO seatMap(Long trainId, Integer seatType, RangeBO range);
+
+    /**
      * 抢占座位（乐观锁，并发安全）
      *
      * @param trainId  车次ID
@@ -22,6 +29,22 @@ public interface SeatService {
      * @param orderNo  订单号
      */
     SeatBO pickAndLockSeat(Long trainId, Integer seatType, Long seatId, String orderNo);
+
+    /**
+     * 抢占座位（并发安全，支持「优先同车厢」）
+     *
+     * @param seatId           指定座位ID，为空则自动分配
+     * @param preferCarriageNo 优先分配的车厢号（批量购票让同行人坐一起），为空 / 该车厢无座时自动改分配其它车厢
+     */
+    SeatBO pickAndLockSeat(Long trainId, Integer seatType, Long seatId, String orderNo, Integer preferCarriageNo);
+
+    /**
+     * 抢占座位（区间票）
+     *
+     * @param range 乘车区间；为空按全程票处理
+     */
+    SeatBO pickAndLockSeat(Long trainId, Integer seatType, Long seatId, String orderNo,
+                           Integer preferCarriageNo, RangeBO range);
 
     /**
      * 释放座位（取消订单 / 下单失败补偿）

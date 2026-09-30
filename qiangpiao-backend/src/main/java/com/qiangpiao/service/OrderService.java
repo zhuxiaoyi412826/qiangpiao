@@ -2,6 +2,7 @@ package com.qiangpiao.service;
 
 import com.qiangpiao.bo.OrderBO;
 import com.qiangpiao.bo.SeckillTaskBO;
+import com.qiangpiao.common.constant.OrderAction;
 import com.qiangpiao.common.result.PageResult;
 import com.qiangpiao.dto.OrderQueryDTO;
 import com.qiangpiao.dto.PayDTO;
@@ -33,9 +34,14 @@ public interface OrderService {
     com.qiangpiao.vo.PaymentVO pay(com.qiangpiao.dto.PayDTO payDTO, Long userId);
 
     /**
-     * 取消订单：释放座位 + 回滚库存
+     * 取消订单：释放座位 + 回滚库存（用户主动取消，记 CANCEL）
      */
     void cancel(String orderNo, Long userId);
+
+    /**
+     * 带动作区分的关单：用户取消记 CANCEL，超时关单记 EXPIRE，时间轴据此区分是谁关的单。
+     */
+    void cancel(String orderNo, Long userId, OrderAction action, String detail);
 
     /**
      * 订单业务对象（Service 之间调用）

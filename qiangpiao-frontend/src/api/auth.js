@@ -11,3 +11,8 @@ export function register(data) {
 export function fetchUserInfo() {
     return request.get('/auth/info')
 }
+
+/** 登出：后端把 token 拉黑，前端随后清本地缓存 */
+export function logout() {
+    return request.post('/auth/logout')
+}

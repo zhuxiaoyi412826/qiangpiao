@@ -40,6 +40,15 @@ public interface WalletService {
     BigDecimal refund(Long userId, BigDecimal amount, String bizNo, String title, String detail);
 
     /**
+     * 幂等退款入账：同一 idempotentKey 只会真正入账一次（退票 / 改签退差必须用它）。
+     *
+     * @param idempotentKey 幂等键，如 REFUND:订单号
+     * @return 退款后的余额（重复调用返回首次入账时的余额快照）
+     */
+    BigDecimal refundOnce(Long userId, BigDecimal amount, String idempotentKey,
+                          String bizNo, String title, String detail);
+
+    /**
      * 平台入账：用户购票付款时，票款进入平台账户（收款方），形成闭环资金流。
      *
      * @return 入账后的平台余额

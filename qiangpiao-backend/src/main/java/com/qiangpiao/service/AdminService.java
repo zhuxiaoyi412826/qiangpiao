@@ -11,6 +11,7 @@ import com.qiangpiao.dataobject.StationDO;
 import com.qiangpiao.dataobject.TrainDO;
 import com.qiangpiao.dataobject.TrainStopDO;
 import com.qiangpiao.dataobject.UserDO;
+import com.qiangpiao.vo.SeckillFlowVO;
 import com.qiangpiao.dto.AdminOrderQueryDTO;
 import com.qiangpiao.common.result.PageResult;
 import com.qiangpiao.vo.AdminOrderVO;
@@ -53,6 +54,12 @@ public interface AdminService {
     /** 停开某一天车次（停运）/ 恢复 */
     void updateTrainStatus(Long trainId, Integer status);
 
+    /**
+     * 设置车次售卖时间窗口（t_train.sale_start_time / sale_end_time）。
+     * 两个时间都可以为空，为空表示不限制；窗口外不允许抢票 / 下单。
+     */
+    void updateSaleWindow(Long trainId, java.time.LocalDateTime startTime, java.time.LocalDateTime endTime);
+
     List<TrainStopDO> stops(Long trainId);
 
     /** 全量覆盖车次时刻表 */
@@ -82,6 +89,12 @@ public interface AdminService {
 
     PageResult<AdminOrderVO> orders(AdminOrderQueryDTO query);
 
+    /**
+     * 抢票流水（后台排查用：谁在什么时候抢了哪趟车、成功还是失败、耗时多少）
+     */
+    PageResult<SeckillFlowVO> seckillFlows(Long userId, Long trainId, Integer status,
+                                           Integer pageNum, Integer pageSize);
+
     AdminOrderVO orderDetail(String orderNo);
 
     List<OrderLogDO> orderLogs(String orderNo);
@@ -92,8 +105,15 @@ public interface AdminService {
 
     PageResult<UserDO> users(String keyword, Integer pageNum, Integer pageSize);
 
-    /** 封禁 / 解封用户 */
+    /** 封禁 / 解封用户（封禁会同步把该用户 token 全部拉黑） */
     void updateUserStatus(Long userId, Integer status);
+
+    /**
+     * 强制下线：拉黑该用户当前所有 token，下一次请求即 401。
+     *
+     * @return 被拉黑的 token 数量（0 表示对方没有在线 token）
+     */
+    int kickUser(Long userId);
 
     // ==================== 公告 ====================
 

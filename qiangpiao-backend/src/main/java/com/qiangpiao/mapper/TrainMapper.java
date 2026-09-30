@@ -25,6 +25,20 @@ public interface TrainMapper {
                       @Param("toStation") String toStation,
                       @Param("departDate") LocalDate departDate);
 
+    /**
+     * 区间票查询：按「经停站」匹配，支持中途上车 / 中途下车
+     * （from 站必须在 to 站之前，靠 t_train_stop.stop_order 保证方向正确）。
+     */
+    List<TrainDO> selectBySegment(@Param("fromStation") String fromStation,
+                                  @Param("toStation") String toStation,
+                                  @Param("departDate") LocalDate departDate,
+                                  @Param("offset") Long offset,
+                                  @Param("limit") Long limit);
+
+    long countBySegment(@Param("fromStation") String fromStation,
+                        @Param("toStation") String toStation,
+                        @Param("departDate") LocalDate departDate);
+
     List<TrainDO> selectAll(@Param("offset") Long offset, @Param("limit") Long limit);
 
     long countAll();

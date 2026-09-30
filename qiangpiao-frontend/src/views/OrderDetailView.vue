@@ -47,7 +47,10 @@
               :hollow="false"
               placement="top">
             <el-card shadow="never" class="log-card">
-              <div class="log-title">{{ log.actionText }}</div>
+              <div class="log-title">
+                <el-tag size="small" :type="timelineType(log.action)">{{ timelineTag(log.action) }}</el-tag>
+                <span class="log-action">{{ log.actionText }}</span>
+              </div>
               <div class="muted">{{ log.detail }}</div>
               <div class="muted log-meta">操作人 {{ log.operator }} · traceId {{ log.traceId }}</div>
             </el-card>
@@ -241,11 +244,33 @@ function fmt(v) {
   return '-'
 }
 
+/** 时间轴节点配色：成功绿 / 失败红 / 变更橙 / 进行中蓝 */
 function timelineType(action) {
-  if (action === 'PAY') return 'success'
-  if (action === 'REFUND' || action === 'CANCEL' || action === 'EXPIRE') return 'danger'
-  if (action === 'CHANGE') return 'warning'
+  if (action === 'PAY' || action === 'CREATE') return 'success'
+  if (action === 'REFUND' || action === 'CANCEL' || action === 'EXPIRE'
+    || action === 'PAY_FAIL' || action === 'SECKILL_FAIL') return 'danger'
+  if (action === 'CHANGE' || action === 'PAY_ABNORMAL' || action === 'PAY_CLOSE') return 'warning'
+  // PAY_CREATE / SECKILL_ACCEPT 属于进行中
   return 'primary'
+}
+
+/** 节点语义标签：让用户一眼看懂这一步是干嘛的 */
+function timelineTag(action) {
+  const map = {
+    SECKILL_ACCEPT: '抢票受理',
+    SECKILL_FAIL: '抢票失败',
+    CREATE: '下单',
+    PAY_CREATE: '发起支付',
+    PAY: '支付',
+    PAY_FAIL: '支付失败',
+    PAY_ABNORMAL: '支付异常',
+    PAY_CLOSE: '支付单关闭',
+    CANCEL: '取消',
+    EXPIRE: '超时',
+    REFUND: '退票',
+    CHANGE: '改签'
+  }
+  return map[action] || '流转'
 }
 </script>
 
@@ -256,5 +281,6 @@ function timelineType(action) {
 .log-card { padding: 6px 10px; }
 .pay-tip { margin-top: 10px; font-size: 12px; color: #909399; line-height: 1.6; }
 .log-title { font-weight: 600; }
+.log-action { margin-left: 8px; }
 .log-meta { font-size: 12px; margin-top: 2px; }
 </style>

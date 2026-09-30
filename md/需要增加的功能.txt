@@ -1,0 +1,38 @@
+P0 — 稳定性与正确性（建议先做）
+#	缺口	建议
+1	JWT 无法登出 / 踢下线：SecurityConfig 里 .logout().disable()，token 签发后到过期前一直有效	Redis token 黑名单（qp:token:blacklist:{jti}，TTL = 剩余有效期）+ JwtAuthenticationFilter 查一次；或 t_user 加 token_version，改密码即失效
+2	异步下单无持久化：seckillExecutor 是内存线程池，进程重启/宕机会丢任务，且此时 Redis 库存已扣但未成单	换成 Redis Stream / List 做可靠队列（消费确认 + pending 重试），或 RabbitMQ；保留线程池也要加“启动时扫描孤儿 key 补偿”
+3	库存无对账：Redis 库存与 DB 长期漂移无人发现	新增 StockReconcileTask：比对 qp:seckill:stock vs t_train_stock.available_count vs t_seat 状态计数，不一致自动校准并告警日志
+4	回源锁非分布式：MultiLevelCacheService 用本地 ReentrantLock，多实例会并发穿透到 DB	启用已预留的 RedisKeys.lock()，用 SET NX PX + 解锁 Lua（Redisson 更好）做成分布式锁，本地锁降级为二级防重
+5	零测试：没有 *Test.java	至少补 3 类：Lua 脚本扣减/回滚的单测、SeckillService 幂等与补偿分支、MultiLevelCacheService 穿透/击穿场景（JUnit5 + Mockito，Redis 可用 Testcontainers）
+6
+
+
+
+
+
+16	查询只有起终点直达	加 t_train_stop（经停站表）→ 支持中转方案推荐、经停时刻查询，实现最短 花钱最少路径算法
+17	无管理员能力	车次/库存/车站 CRUD + 数据看板（GMV、成功率、热点车次），目前只有两个预热接口
+18	身份证明文入库	落库加密（AES）+ 出库脱敏，或至少数据库列级加密
+P3 — 工程化与交付
+#	缺口	建议
+19	无 CI	GitHub Actions：mvn test → package → 产物上传；PR 自动构建
+20	部署靠手工	Dockerfile（JDK8 + Tomcat9）+ docker-compose（mysql/redis/backend/nginx），一键起环境
+21	无监控	接入 Actuator + Micrometer + Prometheus/Grafana（现有只有 Druid），暴露 JVM、秒杀队列长度、缓存命中率
+22	无压测报告	JMeter/Gatling 脚本 + 压测数据（QPS、超卖验证），README 里给出结论
+23	通用幂等缺失	抽象 @Idempotent 注解 + Redis 幂等键（现有只有秒杀记录唯一索引这一处特例）
+P4 — 前端体验
+抢票排队页改 SSE 实时推送、加入倒计时/库存实时条
+token 静默续期（配合后端 Refresh Token）
+手机号/邮箱/账号 登录注册
+常用乘车人功能
+增加这个功能 出发站点 和到达站点可以搜索城市或者拼音简码展示 当前城市所有车站，如果搜索具体车站就显示那个车站
+
+按照12306买票思路，实现一个完整的秒杀系统 业务日志完整回流，比如用户下单，支付，退款，改签，订单完整业务流程日志
+
+
+
+
+
+
+

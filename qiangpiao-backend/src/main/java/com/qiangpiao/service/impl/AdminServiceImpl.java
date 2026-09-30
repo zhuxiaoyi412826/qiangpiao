@@ -4,6 +4,7 @@ import com.qiangpiao.common.constant.Constants;
 import com.qiangpiao.common.exception.BizException;
 import com.qiangpiao.common.result.PageResult;
 import com.qiangpiao.common.result.ResultCode;
+import com.qiangpiao.common.util.SensitiveCrypto;
 import com.qiangpiao.dataobject.AnnouncementDO;
 import com.qiangpiao.dataobject.CarriageDO;
 import com.qiangpiao.dataobject.LineDO;
@@ -18,8 +19,12 @@ import com.qiangpiao.dataobject.UserDO;
 import com.qiangpiao.dto.AdminOrderQueryDTO;
 import com.qiangpiao.mapper.AdminMapper;
 import com.qiangpiao.service.AdminService;
+import com.qiangpiao.service.OrderLogService;
+import com.qiangpiao.service.SeckillFlowService;
+import com.qiangpiao.service.TokenService;
 import com.qiangpiao.service.TrainService;
 import com.qiangpiao.vo.AdminOrderVO;
+import com.qiangpiao.vo.SeckillFlowVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -44,6 +49,10 @@ public class AdminServiceImpl implements AdminService {
 
     private final AdminMapper adminMapper;
     private final TrainService trainService;
+    private final SensitiveCrypto crypto;
+    private final OrderLogService orderLogService;
+    private final SeckillFlowService seckillFlowService;
+    private final TokenService tokenService;
 
     // ==================== 车站 ====================
 
@@ -140,6 +149,13 @@ public class AdminServiceImpl implements AdminService {
     }
 
     @Override
+    public void updateSaleWindow(Long trainId, java.time.LocalDateTime startTime, java.time.LocalDateTime endTime) {
+        adminMapper.updateSaleWindow(trainId, startTime, endTime);
+        trainService.evictTrainCache(trainId);
+        log.info("车次售卖时间窗口变更：trainId={}, start={}, end={}", trainId, startTime, endTime);
+    }
+
+    @Override
     public List<TrainStopDO> stops(Long trainId) {
         return adminMapper.listStops(trainId);
     }
@@ -220,6 +236,12 @@ public class AdminServiceImpl implements AdminService {
     // ==================== 订单 ====================
 
     @Override
+    public PageResult<SeckillFlowVO> seckillFlows(Long userId, Long trainId, Integer status,
+                                                  Integer pageNum, Integer pageSize) {
+        return seckillFlowService.page(userId, trainId, status, pageNum, pageSize);
+    }
+
+    @Override
     public PageResult<AdminOrderVO> orders(AdminOrderQueryDTO query) {
         int pn = (query.getPageNum() == null || query.getPageNum() < 1) ? 1 : query.getPageNum();
         int ps = (query.getPageSize() == null || query.getPageSize() < 1) ? 10 : Math.min(query.getPageSize(), 100);
@@ -227,12 +249,18 @@ public class AdminServiceImpl implements AdminService {
         query.setPageSize(ps);
         query.setOffset((long) (pn - 1) * ps);
         query.setLimit((long) ps);
+        // 手机号加密存储：查询条件转成密文等值匹配（明文条件保留用于匹配存量数据）
+        String phone = query.getPhone();
+        query.setPhoneCipher(phone == null || phone.isEmpty() ? null : crypto.encrypt(phone.trim()));
 
         List<AdminOrderVO> list = adminMapper.listOrders(query);
         long total = adminMapper.countOrders(query);
         if (list != null) {
             for (AdminOrderVO vo : list) {
                 vo.setStatusText(OrderServiceImpl.statusText(vo.getStatus()));
+                // 库里是密文，后台展示同样只给脱敏值
+                vo.setIdCard(crypto.maskIdCard(vo.getIdCard()));
+                vo.setPhone(crypto.maskPhone(vo.getPhone()));
             }
         }
         return PageResult.of(pn, ps, total, list == null ? new ArrayList<>() : list);
@@ -250,12 +278,14 @@ public class AdminServiceImpl implements AdminService {
         }
         AdminOrderVO vo = list.get(0);
         vo.setStatusText(OrderServiceImpl.statusText(vo.getStatus()));
+        vo.setIdCard(crypto.maskIdCard(vo.getIdCard()));
+        vo.setPhone(crypto.maskPhone(vo.getPhone()));
         return vo;
     }
 
     @Override
     public List<OrderLogDO> orderLogs(String orderNo) {
-        return adminMapper.listOrderLogs(orderNo);
+        return orderLogService.timeline(orderNo);
     }
 
     @Override
@@ -269,12 +299,16 @@ public class AdminServiceImpl implements AdminService {
     public PageResult<UserDO> users(String keyword, Integer pageNum, Integer pageSize) {
         int pn = (pageNum == null || pageNum < 1) ? 1 : pageNum;
         int ps = (pageSize == null || pageSize < 1) ? 10 : Math.min(pageSize, 100);
-        List<UserDO> list = adminMapper.listUsers(keyword, (long) (pn - 1) * ps, (long) ps);
-        long total = adminMapper.countUsers(keyword);
-        // 不向前端返回密码等敏感字段
+        // keyword 本身就是手机号时，用密文等值补一个匹配条件（加密后无法 LIKE）
+        String phoneCipher = (keyword != null && crypto.validPhone(keyword)) ? crypto.encrypt(keyword) : null;
+        List<UserDO> list = adminMapper.listUsers(keyword, phoneCipher, (long) (pn - 1) * ps, (long) ps);
+        long total = adminMapper.countUsers(keyword, phoneCipher);
+        // 不向前端返回密码等敏感字段；身份证 / 手机号解密后脱敏
         if (list != null) {
             for (UserDO user : list) {
                 user.setPassword(null);
+                user.setIdCard(crypto.maskIdCard(user.getIdCard()));
+                user.setPhone(crypto.maskPhone(user.getPhone()));
             }
         }
         return PageResult.of(pn, ps, total, list == null ? new ArrayList<>() : list);
@@ -289,7 +323,22 @@ public class AdminServiceImpl implements AdminService {
             throw new BizException(ResultCode.FORBIDDEN);
         }
         adminMapper.updateUserStatus(userId, status);
+        // 封号要立即生效：否则被封用户手里的 token 还能一直用到自然过期
+        if (status.intValue() == Constants.USER_STATUS_DISABLED) {
+            int kicked = tokenService.kickUser(userId);
+            log.info("封号已同步踢下线：userId={}, 失效 token 数={}", userId, kicked);
+        }
         log.info("用户状态变更：userId={}, status={}", userId, status);
+    }
+
+    @Override
+    public int kickUser(Long userId) {
+        if (userId == null) {
+            throw new BizException(ResultCode.BAD_REQUEST);
+        }
+        int kicked = tokenService.kickUser(userId);
+        log.info("管理端强制下线：userId={}, 失效 token 数={}", userId, kicked);
+        return kicked;
     }
 
     // ==================== 公告 ====================

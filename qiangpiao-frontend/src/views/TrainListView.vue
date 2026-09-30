@@ -3,13 +3,17 @@
     <div class="card-panel">
       <el-form :inline="true" :model="query" @submit.prevent>
         <el-form-item label="出发站">
-          <!-- 站点 3000+，用虚拟滚动选择器，避免渲染上千 el-option 卡死主线程 -->
-          <el-select-v2 v-model="query.fromStation" :options="stationOptions" filterable clearable
-                        placeholder="输入或选择" style="width: 180px"/>
+          <!-- 站点 3000+：虚拟滚动选择器；输入时走后端搜索（城市 / 拼音简码 / 站名） -->
+          <el-select-v2 v-model="query.fromStation" :options="stationOptions" filterable remote clearable
+                        :remote-method="onStationSearch" :loading="stationLoading"
+                        @visible-change="onStationVisible"
+                        placeholder="城市 / 拼音简码 / 站名" style="width: 200px"/>
         </el-form-item>
         <el-form-item label="到达站">
-          <el-select-v2 v-model="query.toStation" :options="stationOptions" filterable clearable
-                        placeholder="输入或选择" style="width: 180px"/>
+          <el-select-v2 v-model="query.toStation" :options="stationOptions" filterable remote clearable
+                        :remote-method="onStationSearch" :loading="stationLoading"
+                        @visible-change="onStationVisible"
+                        placeholder="城市 / 拼音简码 / 站名" style="width: 200px"/>
         </el-form-item>
         <el-form-item label="出发日期">
           <el-date-picker v-model="query.departDate" type="date" value-format="YYYY-MM-DD"
@@ -127,6 +131,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { queryTrains, fetchTrainStops } from '@/api/train'
+import { searchStations } from '@/api/station'
 import SkeletonCard from '@/components/SkeletonCard.vue'
 import ErrorRetry from '@/components/ErrorRetry.vue'
 import { useStationStore } from '@/store/station'
@@ -137,10 +142,73 @@ const router = useRouter()
 const stationStore = useStationStore()
 
 const stations = computed(() => stationStore.stations)
-/** 供 el-select-v2 使用（虚拟滚动，只渲染可视项） */
-const stationOptions = computed(() =>
-  stations.value.map(s => ({ value: s.stationName, label: s.stationName }))
-)
+
+/** option 文案：站名 + 城市，方便一眼区分同城多个车站 */
+function stationLabel(s) {
+  const city = s.city && s.city !== s.stationName ? s.city : ''
+  return city ? `${s.stationName}（${city}）` : s.stationName
+}
+
+/** 未输入关键词时的全量列表（虚拟滚动，只渲染可视项） */
+const baseOptions = computed(() => stations.value.map(s => ({ value: s.stationName, label: stationLabel(s) })))
+
+const remoteKeyword = ref('')
+const remoteOptions = ref([])
+const stationLoading = ref(false)
+
+/**
+ * 输入关键词时走后端搜索：支持城市名 / 拼音简码 / 站名
+ * - 搜城市（北京 / bj）→ 返回该城市全部车站
+ * - 搜具体站名 → 只返回那一个车站
+ */
+let stationTimer = null
+async function onStationSearch(keyword) {
+  const kw = (keyword || '').trim()
+  remoteKeyword.value = kw
+  if (stationTimer) {
+    clearTimeout(stationTimer)
+    stationTimer = null
+  }
+  if (!kw) {
+    remoteOptions.value = []
+    stationLoading.value = false
+    return
+  }
+  stationLoading.value = true
+  // 简单防抖：连续输入时只在停手 250ms 后请求一次
+  stationTimer = setTimeout(async () => {
+    try {
+      const data = await searchStations(kw)
+      remoteOptions.value = (data || []).map(s => ({ value: s.stationName, label: stationLabel(s) }))
+    } catch {
+      remoteOptions.value = []
+    } finally {
+      stationLoading.value = false
+    }
+  }, 250)
+}
+
+/** 下拉关闭后恢复全量，下次打开还能看到全部车站 */
+function onStationVisible(visible) {
+  if (!visible) {
+    remoteKeyword.value = ''
+    remoteOptions.value = []
+  }
+}
+
+/** 远程模式下只显示搜索结果，补上已选项避免回显成裸站名 */
+const stationOptions = computed(() => {
+  if (!remoteKeyword.value) {
+    return baseOptions.value
+  }
+  const map = new Map(remoteOptions.value.map(o => [o.value, o]))
+  ;[query.value.fromStation, query.value.toStation].forEach(v => {
+    if (v && !map.has(v)) {
+      map.set(v, { value: v, label: v })
+    }
+  })
+  return Array.from(map.values())
+})
 const loading = ref(false)
 const list = ref([])
 const total = ref(0)
@@ -222,7 +290,13 @@ function pickTomorrow() {
 }
 
 function goDetail(trainId) {
-  router.push(`/trains/${trainId}`)
+  // 带上查询条件：详情据此按「上车站 → 下车站」算区间余票与可选座位
+  const params = new URLSearchParams()
+  if (query.value.fromStation) params.set('from', query.value.fromStation)
+  if (query.value.toStation) params.set('to', query.value.toStation)
+  if (query.value.departDate) params.set('date', query.value.departDate)
+  const qs = params.toString()
+  router.push(qs ? `/trains/${trainId}?${qs}` : `/trains/${trainId}`)
 }
 
 // ---------- 时刻表（站点时序）弹窗 ----------

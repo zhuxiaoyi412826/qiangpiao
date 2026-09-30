@@ -19,5 +19,11 @@ public interface SeckillRecordMapper {
                                          @Param("seatType") Integer seatType,
                                          @Param("userId") Long userId);
 
+    /** 同一用户 + 车次 + 席别 + 乘车人（身份证密文）是否已抢过 */
+    SeckillRecordDO selectByUserTrainAndIdCard(@Param("trainId") Long trainId,
+                                               @Param("seatType") Integer seatType,
+                                               @Param("userId") Long userId,
+                                               @Param("idCard") String idCard);
+
     int deleteByOrderNo(@Param("orderNo") String orderNo);
 }

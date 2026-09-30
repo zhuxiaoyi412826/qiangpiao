@@ -41,6 +41,17 @@
           AND available_count > 0
     </update>
 
+    <!-- 按车次+席别原子扣减：一条语句完成「判断有余票 + 扣减」，靠行锁串行，不需要 select + version 重试。
+         批量抢票时 N 个并发事务各扣各的，不会因为乐观锁重试次数耗尽而误报「余票不足」。 -->
+    <update id="decreaseStockByTrain">
+        UPDATE t_train_stock
+        SET available_count = available_count - 1,
+            version = version + 1
+        WHERE train_id = #{trainId}
+          AND seat_type = #{seatType}
+          AND available_count > 0
+    </update>
+
     <update id="increaseStock">
         UPDATE t_train_stock
         SET available_count = available_count + 1,

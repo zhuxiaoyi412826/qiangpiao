@@ -1,6 +1,7 @@
 package com.qiangpiao.service.impl;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.qiangpiao.bo.RangeBO;
 import com.qiangpiao.bo.TrainBO;
 import com.qiangpiao.bo.TrainStockBO;
 import com.qiangpiao.cache.MultiLevelCacheService;
@@ -15,6 +16,7 @@ import com.qiangpiao.dto.TrainQueryDTO;
 import com.qiangpiao.mapper.TrainMapper;
 import com.qiangpiao.mapper.TrainStockMapper;
 import com.qiangpiao.service.SeatService;
+import com.qiangpiao.service.SegmentStockService;
 import com.qiangpiao.service.TrainService;
 import com.qiangpiao.vo.SeatMapVO;
 import com.qiangpiao.vo.TrainDetailVO;
@@ -48,6 +50,7 @@ public class TrainServiceImpl implements TrainService {
     private final MultiLevelCacheService cacheService;
     private final StringRedisTemplate stringRedisTemplate;
     private final com.qiangpiao.service.PurchaseLimitService purchaseLimitService;
+    private final SegmentStockService segmentStockService;
 
     @Value("${cache.default-ttl}")
     private long cacheTtl;
@@ -99,6 +102,13 @@ public class TrainServiceImpl implements TrainService {
             throw new BizException(ResultCode.TRAIN_NOT_SALE);
         }
         LocalDateTime now = LocalDateTime.now();
+        // 售卖时间窗口（t_train.sale_start_time / sale_end_time，两列都为空表示不限制）
+        if (train.getSaleStartTime() != null && now.isBefore(train.getSaleStartTime())) {
+            throw new BizException(ResultCode.SALE_NOT_START);
+        }
+        if (train.getSaleEndTime() != null && now.isAfter(train.getSaleEndTime())) {
+            throw new BizException(ResultCode.SALE_ENDED);
+        }
         LocalDate today = now.toLocalDate();
         LocalDate departDate = train.getDepartDate();
         if (departDate == null || train.departed(now)) {
@@ -140,14 +150,24 @@ public class TrainServiceImpl implements TrainService {
 
     @Override
     public TrainDetailVO detail(Long trainId) {
+        return detail(trainId, null, null);
+    }
+
+    public TrainDetailVO detail(Long trainId, String fromStation, String toStation) {
         TrainBO trainBO = getTrainBO(trainId);
+        // 区间票：座位图与余票都按「本次乘车区间」算，其它区间被占的座位仍可选
+        RangeBO range = segmentStockService.enabled()
+                ? segmentStockService.resolveRange(trainId, fromStation, toStation)
+                : null;
         List<SeatMapVO> seatMaps = new ArrayList<>();
         if (trainBO.getStocks() != null) {
             for (TrainStockBO stock : trainBO.getStocks()) {
-                seatMaps.add(seatService.seatMap(trainId, stock.getSeatType()));
+                seatMaps.add(range == null
+                        ? seatService.seatMap(trainId, stock.getSeatType())
+                        : seatService.seatMap(trainId, stock.getSeatType(), range));
             }
         }
-        TrainVO trainVO = toVO(trainBO);
+        TrainVO trainVO = toVO(trainBO, segmentAvailable(trainBO, fromStation, toStation));
         TrainDetailVO detail = new TrainDetailVO();
         org.springframework.beans.BeanUtils.copyProperties(trainVO, detail);
         detail.setSeatMaps(seatMaps);
@@ -183,14 +203,50 @@ public class TrainServiceImpl implements TrainService {
         if (from == null && to == null && queryDTO.getDepartDate() == null) {
             trains = trainMapper.selectAll(offset, (long) pageSize);
             total = trainMapper.countAll();
+        } else if (segmentStockService.enabled() && from != null && to != null) {
+            // 区间票：按经停站匹配，支持「中途上车 / 中途下车」
+            trains = trainMapper.selectBySegment(from, to, queryDTO.getDepartDate(), offset, (long) pageSize);
+            total = trainMapper.countBySegment(from, to, queryDTO.getDepartDate());
+            if (total == 0) {
+                // 车次没有时刻表数据时回退到「始发站 → 终点站」精确匹配
+                trains = trainMapper.selectByRoute(from, to, queryDTO.getDepartDate(), offset, (long) pageSize);
+                total = trainMapper.countByRoute(from, to, queryDTO.getDepartDate());
+            }
         } else {
             trains = trainMapper.selectByRoute(from, to, queryDTO.getDepartDate(), offset, (long) pageSize);
             total = trainMapper.countByRoute(from, to, queryDTO.getDepartDate());
         }
         List<TrainVO> list = trains.stream()
-                .map(train -> toVO(loadTrainBO(train.getId())))
+                .map(train -> {
+                    TrainBO bo = loadTrainBO(train.getId());
+                    // 余票按「本次查询的乘车区间」算：同座位分段售卖后，不同区间余票不同
+                    return toVO(bo, segmentAvailable(bo, from, to));
+                })
                 .collect(Collectors.toList());
         return PageResult.of(pageNum, pageSize, total, list);
+    }
+
+    /**
+     * 按乘车区间算各席别余票：区间余票 = 该区间覆盖的每一段余票的最小值。
+     * 区间能力未开启 / 该区间无段数据时返回空 Map（调用方沿用全程库存，不污染缓存里的 BO）。
+     */
+    private java.util.Map<Integer, Integer> segmentAvailable(TrainBO bo, String from, String to) {
+        java.util.Map<Integer, Integer> result = new java.util.HashMap<>();
+        if (bo == null || bo.getStocks() == null || bo.getStocks().isEmpty()
+                || !segmentStockService.enabled()) {
+            return result;
+        }
+        RangeBO range = segmentStockService.resolveRange(bo.getId(), from, to);
+        if (range == null || range.getFromOrder() == null || range.getToOrder() == null) {
+            return result;
+        }
+        for (TrainStockBO stock : bo.getStocks()) {
+            Integer available = segmentStockService.available(bo.getId(), stock.getSeatType(), range);
+            if (available != null) {
+                result.put(stock.getSeatType(), available);
+            }
+        }
+        return result;
     }
 
     private TrainBO loadTrainBO(Long trainId) {
@@ -225,6 +281,8 @@ public class TrainServiceImpl implements TrainService {
                 .arriveTime(train.getArriveTime())
                 .durationMinutes(train.getDurationMinutes())
                 .status(train.getStatus())
+                .saleStartTime(train.getSaleStartTime())
+                .saleEndTime(train.getSaleEndTime())
                 .stocks(stocks)
                 .build();
     }
@@ -246,12 +304,20 @@ public class TrainServiceImpl implements TrainService {
     }
 
     private TrainVO toVO(TrainBO bo) {
+        return toVO(bo, java.util.Collections.emptyMap());
+    }
+
+    /**
+     * @param segAvailable 乘车区间余票（席别 -> 余票）；为空的席别沿用全程库存
+     */
+    private TrainVO toVO(TrainBO bo, java.util.Map<Integer, Integer> segAvailable) {
         List<TrainStockVO> stockVOs = bo.getStocks() == null ? new ArrayList<>() : bo.getStocks().stream()
                 .map(stock -> TrainStockVO.builder()
                         .seatType(stock.getSeatType())
                         .seatTypeName(stock.getSeatTypeName())
                         .price(stock.getPrice())
-                        .availableCount(stock.getAvailableCount())
+                        .availableCount(segAvailable.getOrDefault(stock.getSeatType(),
+                                stock.getAvailableCount()))
                         .totalCount(stock.getTotalCount())
                         .build())
                 .collect(Collectors.toList());
@@ -282,6 +348,10 @@ public class TrainServiceImpl implements TrainService {
     private String sellTip(TrainBO bo, LocalDateTime now) {
         if (!bo.onSale()) {
             return "该车次暂不可售";
+        }
+        String windowTip = bo.saleWindowTip(now);
+        if (windowTip != null) {
+            return windowTip;
         }
         if (bo.getDepartDate() == null || bo.departed(now)) {
             return "已发车";

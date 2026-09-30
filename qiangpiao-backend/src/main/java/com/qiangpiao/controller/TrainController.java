@@ -13,6 +13,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.validation.Valid;
@@ -36,9 +37,11 @@ public class TrainController {
     }
 
     @GetMapping("/{trainId}")
-    @ApiOperation("车次详情（含座位图）")
-    public R<TrainDetailVO> detail(@PathVariable Long trainId) {
-        return R.ok(trainService.detail(trainId));
+    @ApiOperation("车次详情（含座位图）；带 from/to 时余票与座位图按该乘车区间计算")
+    public R<TrainDetailVO> detail(@PathVariable Long trainId,
+                                   @RequestParam(required = false) String from,
+                                   @RequestParam(required = false) String to) {
+        return R.ok(trainService.detail(trainId, from, to));
     }
 
     @GetMapping("/{trainId}/buy-block")

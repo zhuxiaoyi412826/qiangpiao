@@ -26,4 +26,8 @@ public class TrainDO extends BaseDO {
     private LocalTime arriveTime;
     private Integer durationMinutes;
     private Integer status;
+    /** 售票开始时间：为空表示不限制（早于该时间点不可购买） */
+    private java.time.LocalDateTime saleStartTime;
+    /** 售票结束时间：为空表示不限制（晚于该时间点不可购买） */
+    private java.time.LocalDateTime saleEndTime;
 }

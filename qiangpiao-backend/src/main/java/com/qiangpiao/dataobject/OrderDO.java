@@ -42,4 +42,19 @@ public class OrderDO extends BaseDO {
     private LocalDateTime payTime;
     private LocalDateTime cancelTime;
     private LocalDateTime expireTime;
+    /** 退票手续费：阶梯计费（开车前 8 天以上免收） */
+    private BigDecimal refundFee;
+    /** 实退金额 = 票价 - 手续费 */
+    private BigDecimal refundAmount;
+    /**
+     * 最初购票车次的开车时间：改签后不更新。
+     * 退票费率按此时间取档 —— 原票不足 8 天改签到 8 天以后再退，依然按 5% 收取。
+     */
+    private LocalDateTime originDepartTime;
+    /** 是否改签过：0-否 1-是（开车后改签过的车票不可退票） */
+    private Integer changed;
+    /** 上车站序号（区间票：对应 t_train_stop.stop_order）；为空表示全程票 */
+    private Integer fromStopOrder;
+    /** 下车站序号（区间票）；为空表示全程票 */
+    private Integer toStopOrder;
 }

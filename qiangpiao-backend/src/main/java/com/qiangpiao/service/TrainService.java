@@ -22,6 +22,15 @@ public interface TrainService {
     TrainDetailVO detail(Long trainId);
 
     /**
+     * 车次详情（按乘车区间）：余票与座位图都按「上车站 → 下车站」计算，
+     * 席位只在当前区间内被占用时才不可选（区间复用）。
+     *
+     * @param fromStation 上车站名，为空表示始发站
+     * @param toStation   下车站名，为空表示终点站
+     */
+    TrainDetailVO detail(Long trainId, String fromStation, String toStation);
+
+    /**
      * 车次业务对象（供其他 Service 调用，不经 Controller）
      */
     TrainBO getTrainBO(Long trainId);

@@ -11,7 +11,16 @@
         </el-form-item>
       </el-form>
       <p class="muted">
-        退票规则：仅限已支付且尚未发车的订单，票款原路退回钱包；改签需改到未发车且有余票的车次，差额多退少补。
+        <b>退票费</b>：开车前 8 天以上<span class="free">免费</span>；48 小时 ~ 8 天 <b>5%</b>；24 ~ 48 小时
+        <b>10%</b>；不足 24 小时 <b>20%</b>；<b>发车后当日 24 点前 50%</b>；<b>次日及以后不再办理退票</b>
+        （尾数以 5 角为单位，最低 2 元）。改签过的车票按<b>最初购票车次</b>开车时间取档（原票不足 8 天，
+        改签到 8 天以后再退仍收 5%），改签后乘车日期在春运时段一律 20%，<b>开车后不可退票</b>。<br/>
+        <b>改签费</b>（按新旧两张票中较低票价计算）：开车前 ≥48 小时改任意预售期车次
+        <span class="free">免费</span>；开车前 &lt;48 小时改原乘车日（含当天）车次
+        <span class="free">免费</span>；开车前 24~48 小时改到乘车日之后 <b>5%</b>；开车前 &lt;24 小时改到乘车日之后
+        <b>15%</b>；开车后当日 24 点前改当天其他车次 <span class="free">免费</span>；开车后当日 24 点前改次日及以后
+        <b>40%</b>。<br/>
+        <b>一张车票只能改签一次</b>；补差价与改签费一并补收，退还差额时先扣改签费。
       </p>
     </div>
 
@@ -34,11 +43,20 @@
         <el-descriptions-item label="票价">¥{{ order.price }}</el-descriptions-item>
         <el-descriptions-item label="出发时间">{{ fmt(order.departTime) }}</el-descriptions-item>
         <el-descriptions-item label="支付截止">{{ fmt(order.expireTime) }}</el-descriptions-item>
+        <el-descriptions-item label="是否改签过">
+          <el-tag size="small" :type="order.changed === 1 ? 'warning' : 'info'">
+            {{ order.changed === 1 ? '已改签' : '未改签' }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="order.status === 3" label="退票手续费">¥{{ order.refundFee }}</el-descriptions-item>
+        <el-descriptions-item v-if="order.status === 3" label="实退金额">¥{{ order.refundAmount }}</el-descriptions-item>
       </el-descriptions>
 
       <div class="op-bar">
         <el-button type="danger" :disabled="order.status !== 1" @click="doRefund">申请退票</el-button>
-        <el-button type="warning" :disabled="order.status !== 1" @click="openChange">申请改签</el-button>
+        <el-button type="warning" :disabled="order.status !== 1 || order.changed === 1" @click="openChange">
+          申请改签
+        </el-button>
       </div>
 
       <el-divider content-position="left">流转时间轴</el-divider>
@@ -59,6 +77,8 @@
           <el-table-column prop="oldSeatNo" label="原座位" width="110"/>
           <el-table-column prop="newSeatNo" label="新座位" width="110"/>
           <el-table-column prop="diffAmount" label="差额" width="90"/>
+          <el-table-column prop="changeFee" label="改签费" width="90"/>
+          <el-table-column prop="feeRule" label="计费档位" min-width="180"/>
           <el-table-column prop="createTime" label="改签时间" width="180"/>
         </el-table>
       </template>
@@ -104,6 +124,14 @@
       <template #footer>
         <span class="muted" style="float: left">
           {{ target ? `已选：${target.trainNo} ${seatName(target.seatType)}` : '请选择目标席位' }}
+          <span v-if="changePreview" class="fee-tip">
+            {{ changePreview.payAmount > 0
+              ? `需补 ¥${changePreview.payAmount}（含改签费 ¥${changePreview.fee}）`
+              : (changePreview.refundAmount > 0
+                ? `实退 ¥${changePreview.refundAmount}（已扣改签费 ¥${changePreview.fee}）`
+                : '票价相同，免收改签费') }}
+            <span v-if="changePreview.feeRule" class="muted"> · {{ changePreview.feeRule }}</span>
+          </span>
         </span>
         <el-button @click="changeVisible = false">取消</el-button>
         <el-button type="primary" :disabled="!target" @click="submitChange">确认改签</el-button>
@@ -113,11 +141,13 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchOrderDetail } from '@/api/order'
-import { fetchTimeline, fetchChanges, refundOrder, changeOrder } from '@/api/aftersale'
+import {
+    fetchTimeline, fetchChanges, refundOrder, changeOrder, previewRefund, previewChange
+} from '@/api/aftersale'
 import { queryTrains } from '@/api/train'
 import { useStationStore } from '@/store/station'
 import SkeletonCard from '@/components/SkeletonCard.vue'
@@ -144,7 +174,19 @@ const trains = ref([])
 const trainLoading = ref(false)
 const trainError = ref('')
 const target = ref(null)
+/** 改签费用试算结果（选中席位后自动算） */
+const changePreview = ref(null)
 const tq = ref({ fromStation: '', toStation: '', departDate: dayjs.today(), pageNum: 1, pageSize: 10 })
+
+watch(target, async v => {
+  changePreview.value = null
+  if (!v || !order.value) return
+  try {
+    changePreview.value = await previewChange(order.value.orderNo, v.trainId, v.seatType)
+  } catch (e) {
+    changePreview.value = null
+  }
+})
 
 onMounted(async () => {
   await stationStore.loadStations()
@@ -169,16 +211,22 @@ async function search() {
 }
 
 async function doRefund() {
-  await ElMessageBox.prompt('请输入退票原因（可留空）', '退票确认', {
-    inputPlaceholder: '如：行程有变',
-    type: 'warning'
-  })
-  await refundOrder(order.value.orderNo, '')
-  ElMessage.success('退票成功，票款已退回钱包')
+  const pv = await previewRefund(order.value.orderNo)
+  const feeText = pv.free
+      ? '免收手续费'
+      : `手续费 ¥${pv.fee}（${pv.feeRule}）`
+  await ElMessageBox.confirm(
+      `票价 ¥${pv.baseAmount}，${feeText}，实退 ¥${pv.refundAmount}。${pv.tip || ''}`,
+      '退票确认', { type: 'warning', confirmButtonText: '确认退票', cancelButtonText: '再想想' })
+  await refundOrder(order.value.orderNo, '用户自助退票')
+  ElMessage.success(`退票成功，实退 ¥${pv.refundAmount} 已退回钱包`)
   search()
 }
 
 async function openChange() {
+  if (order.value && order.value.changed === 1) {
+    return ElMessage.warning('一张车票只能改签一次，该票已办理过改签')
+  }
   target.value = null
   trains.value = []
   if (order.value) {
@@ -204,11 +252,20 @@ async function loadTrains() {
 
 async function submitChange() {
   if (!target.value) return
+  const t = target.value
+  const pv = changePreview.value || await previewChange(order.value.orderNo, t.trainId, t.seatType)
+  const moneyText = pv.payAmount > 0
+      ? `需补差价 ¥${pv.payAmount}（补差价不收手续费）`
+      : (pv.refundAmount > 0
+          ? `退还差额 ¥${pv.baseAmount}，手续费 ¥${pv.fee}（${pv.feeRule}），实退 ¥${pv.refundAmount}`
+          : '票价相同，无差额')
   await ElMessageBox.confirm(
-      `确认将订单 ${order.value.orderNo} 改签至 ${target.value.trainNo}？差额将多退少补。`,
+      `确认将订单 ${order.value.orderNo} 改签至 ${t.trainNo}？${moneyText}。${pv.tip || ''}`,
       '改签确认', { type: 'warning' })
-  await changeOrder(order.value.orderNo, target.value.trainId, target.value.seatType, '用户自助改签')
-  ElMessage.success('改签成功')
+  await changeOrder(order.value.orderNo, t.trainId, t.seatType, '用户自助改签')
+  ElMessage.success(pv.payAmount > 0
+      ? `改签成功，已补差价 ¥${pv.payAmount}`
+      : `改签成功，实退 ¥${pv.refundAmount} 已退回钱包`)
   changeVisible.value = false
   search()
 }
@@ -241,4 +298,6 @@ function timelineType(action) {
 .op-bar { margin: 14px 0 4px; display: flex; gap: 10px; }
 .log-title { font-weight: 600; }
 .seat-btn { margin-right: 6px; margin-bottom: 4px; }
+.free { color: #67c23a; font-weight: 600; }
+.fee-tip { margin-left: 8px; color: #e6a23c; }
 </style>

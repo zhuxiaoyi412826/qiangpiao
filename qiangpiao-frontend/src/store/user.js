@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { localCache } from '@/utils/cache'
-import { login, register, fetchUserInfo } from '@/api/auth'
+import { login, register, fetchUserInfo, logout as reqLogout } from '@/api/auth'
 
 /**
  * 用户状态（Pinia）：登录态 + 个人信息，token 落前端缓存
@@ -49,7 +49,15 @@ export const useUserStore = defineStore('user', {
                 return null
             }
         },
-        logout() {
+        /** 登出：先通知后端把 token 拉黑（失败也要清本地，不能卡住用户退出） */
+        async logout() {
+            try {
+                if (this.token) {
+                    await reqLogout()
+                }
+            } catch (e) {
+                console.warn('[user] 登出接口调用失败，已清理本地登录态', e.message)
+            }
             this.token = ''
             this.userInfo = null
             localCache.remove('token')

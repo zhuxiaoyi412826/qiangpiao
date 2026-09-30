@@ -105,6 +105,12 @@ CREATE TABLE IF NOT EXISTS t_order (
     pay_time       DATETIME      DEFAULT NULL COMMENT '支付时间',
     cancel_time    DATETIME      DEFAULT NULL COMMENT '取消时间',
     expire_time    DATETIME      DEFAULT NULL COMMENT '支付超时时间',
+    -- 退票手续费：按距开车时间阶梯计费（8天以上免费 / 5% / 10% / 20%，尾数 5 角取整、最低 2 元）
+    refund_fee     DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT '退票手续费',
+    refund_amount  DECIMAL(10,2) DEFAULT NULL COMMENT '实退金额 = 票价 - 手续费',
+    -- 最初购票车次的开车时间：改签后不更新；退票费率按此时间取档（原票不足 8 天改签后仍收 5%）
+    origin_depart_time DATETIME  DEFAULT NULL COMMENT '最初购票车次开车时间（改签不更新）',
+    changed        TINYINT       NOT NULL DEFAULT 0 COMMENT '是否改签过：0-否 1-是',
     update_time    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_order_no (order_no),
     KEY idx_user_status (user_id, status),
@@ -161,8 +167,11 @@ CREATE TABLE IF NOT EXISTS t_wallet_flow (
     amount     DECIMAL(10,2)  NOT NULL COMMENT '变动金额：消费为负，充值/退款为正',
     balance    DECIMAL(12,2)  NOT NULL COMMENT '变动后余额',
     remark     VARCHAR(255)   DEFAULT NULL COMMENT '备注',
+    -- 幂等键：退款类操作防重复入账（如 REFUND:订单号）
+    idempotent_key VARCHAR(64) DEFAULT NULL COMMENT '幂等键（退款防重）',
     create_time DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发生时间',
     UNIQUE KEY uk_flow_no (flow_no),
+    UNIQUE KEY uk_idempotent_key (idempotent_key),
     KEY idx_user_time (user_id, create_time),
     KEY idx_biz_no (biz_no)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='零钱流水表';

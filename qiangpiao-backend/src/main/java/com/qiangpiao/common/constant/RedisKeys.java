@@ -29,6 +29,11 @@ public final class RedisKeys {
         return Constants.STOCK_KEY + trainId + ":" + seatType;
     }
 
+    /** 秒杀区间库存 key：trainId + seatType + 段序号 */
+    public static String seckillSegStock(Long trainId, Integer seatType, int segIndex) {
+        return Constants.SECKILL_SEG_STOCK_KEY + trainId + ":" + seatType + ":" + segIndex;
+    }
+
     /**
      * 限购标记 key：按「车次 + 用户」维度（不分席别），实现每人每天每车次限购 1 张。
      */
@@ -41,9 +46,84 @@ public final class RedisKeys {
         return Constants.SECKILL_RESULT_KEY + trainId + ":" + seatType + ":" + userId;
     }
 
-    /** 限流 key */
+    /** 批量抢票：批次 key（value = 该批次订单号，逗号分隔） */
+    public static String seckillBatch(String batchNo) {
+        return Constants.SECKILL_BATCH_KEY + batchNo;
+    }
+
+    /** 批量抢票：批次内单张票的结果 key */
+    public static String seckillTicket(String orderNo) {
+        return Constants.SECKILL_TICKET_KEY + orderNo;
+    }
+
+    /** 批量抢票：批次已落位车厢（同批次的票优先分配同一车厢） */
+    public static String seckillBatchCarriage(String batchNo) {
+        return Constants.SECKILL_BATCH_CARRIAGE_KEY + batchNo;
+    }
+
+    /** 秒杀排队：待处理票数（trainId + seatType 维度） */
+    public static String seckillQueuePending(Long trainId, Integer seatType) {
+        return Constants.SECKILL_QUEUE_PENDING_KEY + trainId + ":" + seatType;
+    }
+
+    /** 秒杀排队：累计受理序号（trainId + seatType 维度） */
+    public static String seckillQueueSeq(Long trainId, Integer seatType) {
+        return Constants.SECKILL_QUEUE_SEQ_KEY + trainId + ":" + seatType;
+    }
+
+    /** 限流 key：用户维度（滑动窗口） */
     public static String userLimit(Long userId) {
         return Constants.LIMIT_KEY + userId;
+    }
+
+    /** 限流 key：IP 维度（滑动窗口） */
+    public static String ipLimit(String ip) {
+        return Constants.LIMIT_IP_KEY + ip;
+    }
+
+    /** 限流 key：全局维度（令牌桶，单 key） */
+    public static String globalLimit() {
+        return Constants.LIMIT_GLOBAL_KEY;
+    }
+
+    /** IP 黑名单集合 */
+    public static String blackIpSet() {
+        return Constants.LIMIT_BLACK_IP_SET;
+    }
+
+    /** IP 黑名单明细（Hash：IP -> 原因 + 解封时间） */
+    public static String blackIpDetail() {
+        return Constants.LIMIT_BLACK_IP_SET + ":detail";
+    }
+
+    /** 图形验证码 key */
+    public static String captcha(String captchaId) {
+        return Constants.CAPTCHA_KEY + captchaId;
+    }
+
+    /** 滑块验证码 key */
+    public static String slider(String sliderId) {
+        return Constants.CAPTCHA_SLIDER_KEY + sliderId;
+    }
+
+    /** 风控：同一 IP 关联账号集合 */
+    public static String riskIpUsers(String ip) {
+        return Constants.RISK_IP_USERS_KEY + ip;
+    }
+
+    /** 风控：用户上次抢票时间 */
+    public static String riskLastAt(Long userId) {
+        return Constants.RISK_LAST_AT_KEY + userId;
+    }
+
+    /** 风控：命中计数（传 ip 或 userId 字符串） */
+    public static String riskMark(String dim) {
+        return Constants.RISK_MARK_KEY + dim;
+    }
+
+    /** 风控事件流水 */
+    public static String riskEvents() {
+        return Constants.RISK_EVENTS_KEY;
     }
 
     /** 支付回调 nonce：防重放（同一 nonce 只处理一次） */
@@ -54,5 +134,15 @@ public final class RedisKeys {
     /** 分布式锁 key */
     public static String lock(String bizKey) {
         return Constants.LOCK_KEY + bizKey;
+    }
+
+    /** JWT 黑名单：已登出 / 被强制下线的 token（jti），TTL = token 剩余有效期 */
+    public static String tokenBlacklist(String jti) {
+        return Constants.TOKEN_BLACKLIST_KEY + jti;
+    }
+
+    /** 某用户当前有效的 token jti 集合（Set）：用于「踢下线」时批量拉黑 */
+    public static String userTokens(Long userId) {
+        return Constants.USER_TOKEN_KEY + userId;
     }
 }

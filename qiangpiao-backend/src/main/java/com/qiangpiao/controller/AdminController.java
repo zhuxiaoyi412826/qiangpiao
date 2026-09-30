@@ -1,7 +1,9 @@
 package com.qiangpiao.controller;
 
+import com.qiangpiao.common.exception.BizException;
 import com.qiangpiao.common.result.PageResult;
 import com.qiangpiao.common.result.R;
+import com.qiangpiao.common.result.ResultCode;
 import com.qiangpiao.dataobject.AnnouncementDO;
 import com.qiangpiao.dataobject.CarriageDO;
 import com.qiangpiao.dataobject.LineDO;
@@ -16,12 +18,17 @@ import com.qiangpiao.dataobject.UserDO;
 import com.qiangpiao.dto.AdminOrderQueryDTO;
 import com.qiangpiao.service.AdminService;
 import com.qiangpiao.service.AfterSaleService;
+import com.qiangpiao.service.RateLimitService;
+import com.qiangpiao.service.RiskControlService;
+import com.qiangpiao.service.SegmentStockService;
 import com.qiangpiao.vo.AdminOrderVO;
+import com.qiangpiao.vo.SeckillFlowVO;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -54,6 +61,9 @@ public class AdminController {
 
     private final AdminService adminService;
     private final AfterSaleService afterSaleService;
+    private final RateLimitService rateLimitService;
+    private final RiskControlService riskControlService;
+    private final SegmentStockService segmentStockService;
 
     // ==================== 车站 ====================
 
@@ -201,6 +211,76 @@ public class AdminController {
         return R.ok(adminService.orderChanges(orderNo));
     }
 
+    // ==================== 区间票 / 售卖窗口 ====================
+
+    @PostMapping("/trains/{id}/sale-window")
+    @ApiOperation("设置车次售卖时间窗口（格式 yyyy-MM-dd HH:mm:ss，传空表示不限时）")
+    public R<Boolean> updateSaleWindow(@PathVariable Long id,
+                                       @RequestParam(required = false) String start,
+                                       @RequestParam(required = false) String end) {
+        adminService.updateSaleWindow(id, parseTime(start), parseTime(end));
+        return R.ok(true);
+    }
+
+    @PostMapping("/trains/{id}/segment/init")
+    @ApiOperation("初始化车次的区间库存（相邻站单段，并把段余票预热到 Redis）")
+    public R<Integer> initSegmentStock(@PathVariable Long id) {
+        return R.ok(segmentStockService.initSegments(id));
+    }
+
+    private java.time.LocalDateTime parseTime(String text) {
+        if (!StringUtils.hasText(text)) {
+            return null;
+        }
+        try {
+            return java.time.LocalDateTime.parse(text.trim().replace(' ', 'T'));
+        } catch (Exception e) {
+            throw new BizException(ResultCode.BAD_REQUEST, "时间格式不正确，应为 yyyy-MM-dd HH:mm:ss");
+        }
+    }
+
+    // ==================== 风控 / 限流 ====================
+
+    @GetMapping("/risk/events")
+    @ApiOperation("风控事件（同一 IP 多账号、极短耗时请求等命中记录）")
+    public R<List<String>> riskEvents(@RequestParam(required = false, defaultValue = "50") Integer limit) {
+        return R.ok(riskControlService.recentEvents(limit == null ? 50 : limit));
+    }
+
+    @GetMapping("/risk/blacklist")
+    @ApiOperation("IP 黑名单（IP -> 拉黑原因与解封时间）")
+    public R<Map<String, String>> blacklist() {
+        return R.ok(rateLimitService.blackIpDetails());
+    }
+
+    @PostMapping("/risk/blacklist")
+    @ApiOperation("拉黑 IP（不传 seconds 默认 30 分钟）")
+    public R<Boolean> blockIp(@RequestParam String ip,
+                              @RequestParam(required = false) Long seconds,
+                              @RequestParam(required = false) String reason) {
+        rateLimitService.blockIp(ip, seconds == null ? 1800L : seconds,
+                StringUtils.hasText(reason) ? reason : "管理员手动拉黑");
+        return R.ok(true);
+    }
+
+    @DeleteMapping("/risk/blacklist/{ip}")
+    @ApiOperation("解除 IP 拉黑")
+    public R<Boolean> unblockIp(@PathVariable String ip) {
+        rateLimitService.unblockIp(ip);
+        riskControlService.resetHits(ip);
+        return R.ok(true);
+    }
+
+    @GetMapping("/seckill/flows")
+    @ApiOperation("抢票流水：谁在什么时候抢了哪趟车、结果 / 耗时 / 失败原因（排查超卖与抢票失败用）")
+    public R<PageResult<SeckillFlowVO>> seckillFlows(@RequestParam(required = false) Long userId,
+                                                     @RequestParam(required = false) Long trainId,
+                                                     @RequestParam(required = false) Integer status,
+                                                     @RequestParam(required = false, defaultValue = "1") Integer pageNum,
+                                                     @RequestParam(required = false, defaultValue = "10") Integer pageSize) {
+        return R.ok(adminService.seckillFlows(userId, trainId, status, pageNum, pageSize));
+    }
+
     @PostMapping("/orders/{orderNo}/refund")
     @ApiOperation("后台人工退票（客服）")
     public R<Boolean> refundOrder(@PathVariable String orderNo, @RequestBody(required = false) Map<String, String> body) {
@@ -220,10 +300,16 @@ public class AdminController {
     }
 
     @PutMapping("/users/{id}/status")
-    @ApiOperation("封禁 / 解封用户")
+    @ApiOperation("封禁 / 解封用户（封禁会同步踢下线）")
     public R<Boolean> updateUserStatus(@PathVariable Long id, @RequestParam Integer status) {
         adminService.updateUserStatus(id, status);
         return R.ok(true);
+    }
+
+    @PostMapping("/users/{id}/kick")
+    @ApiOperation("强制下线（拉黑该用户所有 token，立即生效）")
+    public R<Integer> kickUser(@PathVariable Long id) {
+        return R.ok(adminService.kickUser(id));
     }
 
     // ==================== 公告 ====================

@@ -1,6 +1,7 @@
 package com.qiangpiao.service;
 
 import com.qiangpiao.dto.SeckillDTO;
+import com.qiangpiao.vo.SeckillBatchResultVO;
 import com.qiangpiao.vo.SeckillResultVO;
 import com.qiangpiao.vo.SeckillStatusVO;
 
@@ -15,9 +16,16 @@ public interface SeckillService {
     SeckillResultVO seckill(Long userId, SeckillDTO seckillDTO, String ip);
 
     /**
-     * 轮询抢票结果
+     * 轮询抢票结果（单张）
      */
     SeckillStatusVO queryResult(Long trainId, Integer seatType, Long userId);
+
+    /**
+     * 轮询批量抢票结果（一次买多张）
+     *
+     * @param batchNo 下单返回的批次号
+     */
+    SeckillBatchResultVO queryBatchResult(Long userId, String batchNo);
 
     /**
      * 预热单个车次的秒杀库存到 Redis

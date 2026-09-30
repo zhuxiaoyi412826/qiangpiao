@@ -29,13 +29,32 @@
         LIMIT 1
     </select>
 
+    <!-- 车站搜索：站名 / 城市 / 拼音简码任意一项命中即返回，
+         命中「城市」时通过子查询把该城市的所有车站一起带出来（搜城市出全城车站）。
+         排序权重：城市 / 拼音简码精确 > 站名前缀 > 城市前缀 > 其它。 -->
     <select id="selectByKeyword" resultType="com.qiangpiao.dataobject.StationDO">
-        SELECT
-        <include refid="Base_Column_List"/>
-        FROM t_station
-        WHERE station_name LIKE CONCAT('%', #{keyword}, '%')
-           OR py_code LIKE CONCAT('%', #{keyword}, '%')
-           OR city LIKE CONCAT('%', #{keyword}, '%')
-        LIMIT 20
+        SELECT id, station_name, city, py_code, create_time
+        FROM (
+            SELECT s.id, s.station_name, s.city, s.py_code, s.create_time,
+                   CASE
+                       WHEN s.city = #{keyword} THEN 1
+                       WHEN UPPER(s.py_code) = UPPER(#{keyword}) THEN 1
+                       WHEN s.station_name LIKE CONCAT(#{keyword}, '%') THEN 2
+                       WHEN s.city LIKE CONCAT(#{keyword}, '%') THEN 3
+                       WHEN UPPER(s.py_code) LIKE CONCAT(UPPER(#{keyword}), '%') THEN 3
+                       ELSE 4
+                   END AS match_rank
+            FROM t_station s
+            WHERE s.station_name LIKE CONCAT('%', #{keyword}, '%')
+               OR s.city LIKE CONCAT('%', #{keyword}, '%')
+               OR UPPER(s.py_code) LIKE CONCAT('%', UPPER(#{keyword}), '%')
+               OR s.city IN (SELECT DISTINCT c.city
+                             FROM t_station c
+                             WHERE c.city LIKE CONCAT('%', #{keyword}, '%')
+                                OR UPPER(c.py_code) LIKE CONCAT('%', UPPER(#{keyword}), '%')
+                                OR c.station_name LIKE CONCAT('%', #{keyword}, '%'))
+        ) t
+        ORDER BY match_rank, city, station_name
+        LIMIT 50
     </select>
 </mapper>

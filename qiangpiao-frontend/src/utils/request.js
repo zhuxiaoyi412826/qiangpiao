@@ -11,22 +11,55 @@ const service = axios.create({
     headers: { 'Content-Type': 'application/json;charset=UTF-8' }
 })
 
+/** 链路追踪头：与后端 TraceIdInterceptor.TRACE_HEADER 保持一致 */
+const TRACE_HEADER = 'X-Trace-Id'
+/** 最近一次请求的 traceId：报错弹窗 / 用户报障时可直接给出，与服务端日志一一对应 */
+let lastTraceId = ''
+
+/** 生成 16 位 traceId；同一次请求的重试复用同一个，便于把重试日志串成一条链路 */
+function genTraceId () {
+    let r = ''
+    for (let i = 0; i < 12; i++) {
+        r += Math.floor(Math.random() * 16).toString(16)
+    }
+    return Date.now().toString(16).slice(-4) + r
+}
+
+export function getLastTraceId () {
+    return lastTraceId
+}
+
+/** 失败提示带上 traceId：用户截图报障时，后端可直接按这个 ID 捞全链路日志 */
+function withTrace (message, traceId) {
+    return traceId ? `${message}（traceId：${traceId}）` : message
+}
+
 service.interceptors.request.use(config => {
     const token = localCache.get('token')
     if (token) {
         config.headers.Authorization = 'Bearer ' + token
     }
+    // 前端生成的 traceId 透传给后端：后端优先采用，前后端日志即可对齐
+    if (!config.headers[TRACE_HEADER]) {
+        config.headers[TRACE_HEADER] = config.__traceId || genTraceId()
+    }
+    config.__traceId = config.headers[TRACE_HEADER]
     return config
 }, error => Promise.reject(error))
 
 service.interceptors.response.use(response => {
     const body = response.data
-    // 后端统一出参：{ code, message, data, timestamp }
+    const traceId = (response.headers && response.headers['x-trace-id'])
+        || (body && body.traceId) || ''
+    if (traceId) {
+        lastTraceId = traceId
+    }
+    // 后端统一出参：{ code, message, data, timestamp, traceId }
     if (body && body.code === 200) {
         return body.data
     }
     const message = (body && body.message) || '请求失败'
-    ElMessage.error(message)
+    ElMessage.error(withTrace(message, traceId))
     if (body && body.code === 401) {
         localCache.remove('token')
         localCache.remove('userInfo')
@@ -38,8 +71,13 @@ service.interceptors.response.use(response => {
 }, error => {
     if (error.response) {
         const { status, data } = error.response
+        const traceId = (error.response.headers && error.response.headers['x-trace-id'])
+            || (data && data.traceId) || ''
+        if (traceId) {
+            lastTraceId = traceId
+        }
         const message = (data && data.message) || `请求异常（${status}）`
-        ElMessage.error(message)
+        ElMessage.error(withTrace(message, traceId))
         return Promise.reject(new Error(message))
     }
     // 幂等请求自动重试后再判定失败

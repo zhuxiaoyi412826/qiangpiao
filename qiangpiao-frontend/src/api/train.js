@@ -4,8 +4,9 @@ export function queryTrains(params) {
     return request.get('/trains', { params })
 }
 
-export function fetchTrainDetail(trainId) {
-    return request.get(`/trains/${trainId}`)
+/** 车次详情；params 可带 { from, to } —— 带上后余票与座位图按该乘车区间计算 */
+export function fetchTrainDetail(trainId, params) {
+    return request.get(`/trains/${trainId}`, { params })
 }
 
 export function fetchBuyBlock(trainId) {

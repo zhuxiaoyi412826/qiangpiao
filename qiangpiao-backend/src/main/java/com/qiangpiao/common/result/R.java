@@ -1,5 +1,6 @@
 package com.qiangpiao.common.result;
 
+import com.qiangpiao.common.util.TraceContext;
 import lombok.Data;
 import lombok.experimental.Accessors;
 
@@ -60,6 +61,9 @@ public class R<T> implements Serializable {
         r.setCode(code);
         r.setMessage(message);
         r.setData(data);
+        // 回填链路追踪 ID：与响应头 X-Trace-Id、日志 %X{traceId} 三者一致，
+        // 用户报障时只需给出这个 ID，就能从日志里捞出该请求的全部链路（含异步下单线程）。
+        r.setTraceId(TraceContext.traceId());
         return r;
     }
 

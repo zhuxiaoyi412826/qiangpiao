@@ -4,6 +4,12 @@ import { localCache } from '@/utils/cache'
 const routes = [
     { path: '/', redirect: '/trains' },
     {
+        path: '/home',
+        name: 'Home',
+        component: () => import('@/views/HomeView.vue'),
+        meta: { title: '首页' }
+    },
+    {
         path: '/login',
         name: 'Login',
         component: () => import('@/views/LoginView.vue'),

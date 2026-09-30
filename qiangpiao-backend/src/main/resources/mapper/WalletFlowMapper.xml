@@ -4,7 +4,7 @@
 <mapper namespace="com.qiangpiao.mapper.WalletFlowMapper">
 
     <sql id="Base_Column_List">
-        id, flow_no, user_id, biz_no, type, title, detail, amount, balance, remark, create_time
+        id, flow_no, user_id, biz_no, type, title, detail, amount, balance, remark, idempotent_key, create_time
     </sql>
 
     <select id="selectByUserId" resultType="com.qiangpiao.dataobject.WalletFlowDO">
@@ -22,8 +22,19 @@
         WHERE user_id = #{userId}
     </select>
 
+    <!-- 幂等：同一 key 的流水已存在则说明该笔账务已处理过 -->
+    <select id="selectByIdempotentKey" resultType="com.qiangpiao.dataobject.WalletFlowDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_wallet_flow
+        WHERE idempotent_key = #{idempotentKey}
+        LIMIT 1
+    </select>
+
     <insert id="insert">
-        INSERT INTO t_wallet_flow (flow_no, user_id, biz_no, type, title, detail, amount, balance, remark, create_time)
-        VALUES (#{flowNo}, #{userId}, #{bizNo}, #{type}, #{title}, #{detail}, #{amount}, #{balance}, #{remark}, NOW())
+        INSERT INTO t_wallet_flow (flow_no, user_id, biz_no, type, title, detail, amount, balance, remark,
+                                   idempotent_key, create_time)
+        VALUES (#{flowNo}, #{userId}, #{bizNo}, #{type}, #{title}, #{detail}, #{amount}, #{balance}, #{remark},
+                #{idempotentKey}, NOW())
     </insert>
 </mapper>

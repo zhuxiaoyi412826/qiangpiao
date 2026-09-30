@@ -36,11 +36,37 @@ public class TrainBO implements Serializable {
     private LocalTime arriveTime;
     private Integer durationMinutes;
     private Integer status;
+    /** 售票开始时间：为空表示不限制 */
+    private LocalDateTime saleStartTime;
+    /** 售票结束时间：为空表示不限制 */
+    private LocalDateTime saleEndTime;
     /** 该车次各席别库存 */
     private List<TrainStockBO> stocks = new ArrayList<>();
 
     public boolean onSale() {
         return status != null && status == 1;
+    }
+
+    /**
+     * 是否处于售卖时间窗口内（t_train.sale_start_time ~ sale_end_time）。
+     * 两列都为空表示不限制（默认一直卖）。
+     */
+    public boolean inSaleWindow(LocalDateTime now) {
+        if (saleStartTime != null && now.isBefore(saleStartTime)) {
+            return false;
+        }
+        return saleEndTime == null || !now.isAfter(saleEndTime);
+    }
+
+    /** 售卖窗口未开始的原因文案；已开始或不限时返回 null */
+    public String saleWindowTip(LocalDateTime now) {
+        if (saleStartTime != null && now.isBefore(saleStartTime)) {
+            return "售票开始时间 " + saleStartTime.toString().replace('T', ' ');
+        }
+        if (saleEndTime != null && now.isAfter(saleEndTime)) {
+            return "售票已于 " + saleEndTime.toString().replace('T', ' ') + " 结束";
+        }
+        return null;
     }
 
     /** 发车时刻（日期 + 时间） */

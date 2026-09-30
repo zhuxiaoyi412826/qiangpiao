@@ -4,6 +4,8 @@ import com.qiangpiao.common.constant.Constants;
 import com.qiangpiao.common.context.UserContext;
 import com.qiangpiao.common.util.IpUtils;
 import com.qiangpiao.common.util.JwtTokenUtil;
+import com.qiangpiao.common.util.TraceContext;
+import com.qiangpiao.service.TokenService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -25,6 +27,7 @@ import java.io.IOException;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenUtil jwtTokenUtil;
+    private final TokenService tokenService;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -33,20 +36,31 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             String token = resolveToken(request);
             if (StringUtils.hasText(token) && jwtTokenUtil.validate(token)) {
-                Long userId = jwtTokenUtil.getUserId(token);
-                String username = jwtTokenUtil.getUsername(token);
-                LoginUser loginUser = new LoginUser(userId, username, jwtTokenUtil.getRoles(token));
-                loginUser.setIp(IpUtils.getIp(request));
+                // 已登出 / 被踢下线 / 账号被封：token 本身没过期，但黑名单里有它的 jti
+                String jti = jwtTokenUtil.getJti(token);
+                if (tokenService.blacklisted(jti)) {
+                    // 不放认证：受保护接口会被 authenticationEntryPoint 拦成 401，前端跳登录页
+                    log.info("token 已失效（登出 / 强制下线）：jti={}", jti);
+                } else {
+                    Long userId = jwtTokenUtil.getUserId(token);
+                    String username = jwtTokenUtil.getUsername(token);
+                    LoginUser loginUser = new LoginUser(userId, username, jwtTokenUtil.getRoles(token));
+                    loginUser.setIp(IpUtils.getIp(request));
 
-                UsernamePasswordAuthenticationToken authentication =
-                        new UsernamePasswordAuthenticationToken(loginUser, null, loginUser.getAuthorities());
-                SecurityContextHolder.getContext().setAuthentication(authentication);
-                UserContext.set(new UserContext.LoginUserHolder(userId, username, loginUser.getIp()));
-                log.debug("JWT 认证成功：userId={}, username={}", userId, username);
+                    UsernamePasswordAuthenticationToken authentication =
+                            new UsernamePasswordAuthenticationToken(loginUser, null, loginUser.getAuthorities());
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                    UserContext.set(new UserContext.LoginUserHolder(userId, username, loginUser.getIp()));
+                    // 登录用户写进 MDC：之后这条请求的所有日志都带 userId（logback %X{userId}）
+                    TraceContext.putUser(userId);
+                    log.debug("JWT 认证成功：userId={}, username={}", userId, username);
+                }
             }
             chain.doFilter(request, response);
         } finally {
             UserContext.clear();
+            // 过滤器是最外层，请求结束统一清 MDC，防止容器线程复用导致 traceId 串号
+            TraceContext.clear();
         }
     }
 

@@ -94,6 +94,11 @@ public interface AdminMapper {
     @Update("UPDATE t_train SET status = #{status} WHERE id = #{id}")
     int updateTrainStatus(@Param("id") Long id, @Param("status") Integer status);
 
+    /** 设置车次售卖时间窗口；两个参数都可为空（不限时） */
+    @Update("UPDATE t_train SET sale_start_time = #{startTime}, sale_end_time = #{endTime} WHERE id = #{id}")
+    int updateSaleWindow(@Param("id") Long id, @Param("startTime") java.time.LocalDateTime startTime,
+                         @Param("endTime") java.time.LocalDateTime endTime);
+
     @Select("SELECT id, train_id, station_id, station_name, stop_order, arrive_time, depart_time, stop_minutes," +
             " distance_km FROM t_train_stop WHERE train_id = #{trainId} ORDER BY stop_order")
     List<TrainStopDO> listStops(Long trainId);
@@ -120,9 +125,11 @@ public interface AdminMapper {
 
     /** 按日期复制出一个新的当日班次（车次模板 -> 每日排班） */
     @Insert("INSERT INTO t_train (train_no, train_type, from_station_id, from_station_name, to_station_id," +
-            " to_station_name, depart_date, depart_time, arrive_time, duration_minutes, status)" +
+            " to_station_name, depart_date, depart_time, arrive_time, duration_minutes, status," +
+            " sale_start_time, sale_end_time)" +
             " SELECT train_no, train_type, from_station_id, from_station_name, to_station_id, to_station_name," +
-            " #{newDate}, depart_time, arrive_time, duration_minutes, status FROM t_train WHERE id = #{sourceTrainId}")
+            " #{newDate}, depart_time, arrive_time, duration_minutes, status, sale_start_time, sale_end_time" +
+            " FROM t_train WHERE id = #{sourceTrainId}")
     int copyTrain(@Param("sourceTrainId") Long sourceTrainId, @Param("newDate") LocalDate newDate);
 
     @Select("SELECT LAST_INSERT_ID()")
@@ -150,7 +157,8 @@ public interface AdminMapper {
             " FROM t_order o LEFT JOIN t_user u ON u.id = o.user_id LEFT JOIN t_train t ON t.id = o.train_id" +
             "<where>" +
             "<if test=\"orderNo != null and orderNo != ''\">AND o.order_no = #{orderNo}</if>" +
-            "<if test=\"phone != null and phone != ''\">AND u.phone LIKE CONCAT('%', #{phone}, '%')</if>" +
+            // 手机号已加密：密文等值匹配（phoneCipher），保留明文等值以兼容存量未加密数据
+            "<if test=\"phone != null and phone != ''\">AND (u.phone = #{phoneCipher} OR u.phone = #{phone})</if>" +
             "<if test=\"passengerName != null and passengerName != ''\">AND o.passenger_name LIKE CONCAT('%', #{passengerName}, '%')</if>" +
             "<if test=\"status != null\">AND o.status = #{status}</if>" +
             "<if test=\"startDate != null\">AND o.create_time &gt;= #{startDate}</if>" +
@@ -161,7 +169,8 @@ public interface AdminMapper {
     @Select("<script>SELECT COUNT(1) FROM t_order o LEFT JOIN t_user u ON u.id = o.user_id" +
             "<where>" +
             "<if test=\"orderNo != null and orderNo != ''\">AND o.order_no = #{orderNo}</if>" +
-            "<if test=\"phone != null and phone != ''\">AND u.phone LIKE CONCAT('%', #{phone}, '%')</if>" +
+            // 手机号已加密：密文等值匹配（phoneCipher），保留明文等值以兼容存量未加密数据
+            "<if test=\"phone != null and phone != ''\">AND (u.phone = #{phoneCipher} OR u.phone = #{phone})</if>" +
             "<if test=\"passengerName != null and passengerName != ''\">AND o.passenger_name LIKE CONCAT('%', #{passengerName}, '%')</if>" +
             "<if test=\"status != null\">AND o.status = #{status}</if>" +
             "<if test=\"startDate != null\">AND o.create_time &gt;= #{startDate}</if>" +
@@ -174,38 +183,37 @@ public interface AdminMapper {
 
     // ==================== 订单流转日志 / 改签 ====================
 
-    @Insert("INSERT INTO t_order_log (order_no, action, action_text, detail, operator, trace_id)" +
-            " VALUES (#{orderNo}, #{action}, #{actionText}, #{detail}, #{operator}, #{traceId})")
-    int insertOrderLog(OrderLogDO log);
-
-    @Select("SELECT id, order_no, action, action_text, detail, operator, trace_id, create_time FROM t_order_log" +
-            " WHERE order_no = #{orderNo} ORDER BY id")
-    List<OrderLogDO> listOrderLogs(String orderNo);
-
     @Insert("INSERT INTO t_order_change (order_no, new_order_no, user_id, old_train_id, new_train_id," +
-            " old_seat_no, new_seat_no, diff_amount, reason)" +
+            " old_seat_no, new_seat_no, diff_amount, change_fee, fee_rule, reason)" +
             " VALUES (#{orderNo}, #{newOrderNo}, #{userId}, #{oldTrainId}, #{newTrainId}," +
-            " #{oldSeatNo}, #{newSeatNo}, #{diffAmount}, #{reason})")
+            " #{oldSeatNo}, #{newSeatNo}, #{diffAmount}, #{changeFee}, #{feeRule}, #{reason})")
     int insertOrderChange(OrderChangeDO change);
 
     @Select("SELECT id, order_no, new_order_no, user_id, old_train_id, new_train_id, old_seat_no, new_seat_no," +
-            " diff_amount, reason, create_time FROM t_order_change" +
+            " diff_amount, change_fee, fee_rule, reason, create_time FROM t_order_change" +
             " WHERE order_no = #{orderNo} OR new_order_no = #{orderNo} ORDER BY id DESC")
     List<OrderChangeDO> listOrderChanges(String orderNo);
 
     // ==================== 用户管理 ====================
 
+    // 手机号加密后无法模糊匹配：keyword 命中手机号时改用密文等值（phoneCipher），
+    // 同时保留明文 LIKE 以兼容存量未加密数据
     @Select("<script>SELECT id, username, real_name, phone, id_card, role, status, create_time FROM t_user" +
             "<where>" +
-            "<if test=\"keyword != null and keyword != ''\">AND (username LIKE CONCAT('%', #{keyword}, '%') OR phone LIKE CONCAT('%', #{keyword}, '%'))</if>" +
+            "<if test=\"keyword != null and keyword != ''\">AND (username LIKE CONCAT('%', #{keyword}, '%')" +
+            " OR phone LIKE CONCAT('%', #{keyword}, '%')" +
+            "<if test=\"phoneCipher != null\"> OR phone = #{phoneCipher}</if>)</if>" +
             "</where> ORDER BY id DESC LIMIT #{offset}, #{limit}</script>")
-    List<UserDO> listUsers(@Param("keyword") String keyword, @Param("offset") Long offset, @Param("limit") Long limit);
+    List<UserDO> listUsers(@Param("keyword") String keyword, @Param("phoneCipher") String phoneCipher,
+                           @Param("offset") Long offset, @Param("limit") Long limit);
 
     @Select("<script>SELECT COUNT(1) FROM t_user" +
             "<where>" +
-            "<if test=\"keyword != null and keyword != ''\">AND (username LIKE CONCAT('%', #{keyword}, '%') OR phone LIKE CONCAT('%', #{keyword}, '%'))</if>" +
+            "<if test=\"keyword != null and keyword != ''\">AND (username LIKE CONCAT('%', #{keyword}, '%')" +
+            " OR phone LIKE CONCAT('%', #{keyword}, '%')" +
+            "<if test=\"phoneCipher != null\"> OR phone = #{phoneCipher}</if>)</if>" +
             "</where></script>")
-    long countUsers(String keyword);
+    long countUsers(@Param("keyword") String keyword, @Param("phoneCipher") String phoneCipher);
 
     @Update("UPDATE t_user SET status = #{status} WHERE id = #{id}")
     int updateUserStatus(@Param("id") Long id, @Param("status") Integer status);
@@ -299,8 +307,9 @@ public interface AdminMapper {
     @Update("UPDATE t_seat SET status = 0, order_no = NULL WHERE order_no = #{orderNo}")
     int releaseSeat(String orderNo);
 
+    // 归还库存必须带 available_count < total_count 条件，重复释放（幂等重试）不会把余票抬超总座数
     @Update("UPDATE t_train_stock SET available_count = LEAST(total_count, available_count + 1)" +
-            " WHERE train_id = #{trainId} AND seat_type = #{seatType}")
+            " WHERE train_id = #{trainId} AND seat_type = #{seatType} AND available_count < total_count")
     int restoreStock(@Param("trainId") Long trainId, @Param("seatType") Integer seatType);
 
     /** 票价调整：按车次席别改价 */
@@ -317,10 +326,11 @@ public interface AdminMapper {
     int deductStock(@Param("trainId") Long trainId, @Param("seatType") Integer seatType);
 
     @Update("UPDATE t_order SET train_id = #{trainId}, seat_type = #{seatType}, carriage_no = #{carriageNo}," +
-            " seat_no = #{seatNo}, price = #{price}, depart_date = #{departDate}," +
+            " seat_no = #{seatNo}, price = #{price}, depart_date = #{departDate}, changed = 1," +
             " train_no_snapshot = #{trainNo}, train_type_snapshot = #{trainType}," +
             " from_station_snapshot = #{fromStation}, to_station_snapshot = #{toStation}," +
-            " depart_time_snapshot = #{departTime}, arrive_time_snapshot = #{arriveTime}" +
+            " depart_time_snapshot = #{departTime}, arrive_time_snapshot = #{arriveTime}," +
+            " origin_depart_time = IFNULL(origin_depart_time, #{originDepartTime})" +
             " WHERE order_no = #{orderNo}")
     int updateOrderForChange(@Param("orderNo") String orderNo, @Param("trainId") Long trainId,
                              @Param("seatType") Integer seatType, @Param("carriageNo") Integer carriageNo,
@@ -329,5 +339,13 @@ public interface AdminMapper {
                              @Param("trainNo") String trainNo, @Param("trainType") String trainType,
                              @Param("fromStation") String fromStation, @Param("toStation") String toStation,
                              @Param("departTime") java.time.LocalTime departTime,
-                             @Param("arriveTime") java.time.LocalTime arriveTime);
+                             @Param("arriveTime") java.time.LocalTime arriveTime,
+                             @Param("originDepartTime") java.time.LocalDateTime originDepartTime);
+
+    /** 退票落库：手续费与实退金额 */
+    @Update("UPDATE t_order SET refund_fee = #{refundFee}, refund_amount = #{refundAmount}, cancel_time = NOW()" +
+            " WHERE order_no = #{orderNo}")
+    int updateOrderRefund(@Param("orderNo") String orderNo,
+                          @Param("refundFee") java.math.BigDecimal refundFee,
+                          @Param("refundAmount") java.math.BigDecimal refundAmount);
 }

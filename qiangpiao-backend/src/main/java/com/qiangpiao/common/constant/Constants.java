@@ -22,16 +22,50 @@ public final class Constants {
 
     /** 秒杀库存 */
     public static final String STOCK_KEY = "qp:seckill:stock:";
+    /** 秒杀区间库存：按「相邻站单段」扣减，OD 区间需覆盖的每一段都够票才成交 */
+    public static final String SECKILL_SEG_STOCK_KEY = "qp:seckill:seg:";
     /** 一人一单标记 */
     public static final String SECKILL_USER_KEY = "qp:seckill:user:";
     /** 用户抢票结果（订单号） */
     public static final String SECKILL_RESULT_KEY = "qp:seckill:result:";
-    /** 接口限流 */
+    /** 批量抢票：批次号 -> 该批次全部订单号（逗号分隔） */
+    public static final String SECKILL_BATCH_KEY = "qp:seckill:batch:";
+    /** 批量抢票：单张票的下单结果（0 排队 / 1:车厢:座位 成功 / -1:原因 失败） */
+    public static final String SECKILL_TICKET_KEY = "qp:seckill:ticket:";
+    /** 批量抢票：批次 -> 已落位车厢（同批次后续票优先坐同一车厢） */
+    public static final String SECKILL_BATCH_CARRIAGE_KEY = "qp:seckill:batch:carriage:";
+    /** 秒杀排队：车次 + 席别 待处理票数（受理时 +N，落库成功 / 补偿时 -1） */
+    public static final String SECKILL_QUEUE_PENDING_KEY = "qp:seckill:queue:pending:";
+    /** 秒杀排队：车次 + 席别 累计受理序号（自增，用于告诉用户「你是第几位」） */
+    public static final String SECKILL_QUEUE_SEQ_KEY = "qp:seckill:queue:seq:";
+    /** 接口限流：用户维度（滑动窗口） */
     public static final String LIMIT_KEY = "qp:limit:user:";
+    /** 接口限流：IP 维度（滑动窗口） */
+    public static final String LIMIT_IP_KEY = "qp:limit:ip:";
+    /** 接口限流：全局维度（令牌桶，单 key） */
+    public static final String LIMIT_GLOBAL_KEY = "qp:limit:global";
+    /** IP 黑名单（SET，值为 IP） */
+    public static final String LIMIT_BLACK_IP_SET = "qp:limit:blacklist";
+    /** 图形验证码：captchaId -> 验证码文本 */
+    public static final String CAPTCHA_KEY = "qp:captcha:code:";
+    /** 滑块验证码：sliderId -> 目标 x 坐标 */
+    public static final String CAPTCHA_SLIDER_KEY = "qp:captcha:slider:";
+    /** 风控：同一 IP 关联过的账号集合 */
+    public static final String RISK_IP_USERS_KEY = "qp:risk:ip:users:";
+    /** 风控：用户上一次抢票时间戳（毫秒） */
+    public static final String RISK_LAST_AT_KEY = "qp:risk:last:";
+    /** 风控：命中计数（IP / 用户维度） */
+    public static final String RISK_MARK_KEY = "qp:risk:mark:";
+    /** 风控事件流水（后台可查最近 N 条） */
+    public static final String RISK_EVENTS_KEY = "qp:risk:events";
     /** 支付回调 nonce 防重放 */
     public static final String PAY_NOTIFY_NONCE_KEY = "qp:pay:notify:nonce:";
     /** 分布式锁 */
     public static final String LOCK_KEY = "qp:lock:";
+    /** JWT 黑名单：jti -> 失效时间戳（登出 / 强制下线 / 封号），TTL = token 剩余有效期 */
+    public static final String TOKEN_BLACKLIST_KEY = "qp:token:blacklist:";
+    /** 用户当前有效 token 的 jti 集合（Set）：支持多端登录，踢下线时批量拉黑 */
+    public static final String USER_TOKEN_KEY = "qp:token:user:";
     /** 缓存空值占位，防穿透 */
     public static final String CACHE_NULL_VALUE = "__NULL__";
 

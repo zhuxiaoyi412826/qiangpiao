@@ -5,6 +5,7 @@ import com.qiangpiao.common.result.R;
 import com.qiangpiao.common.result.ResultCode;
 import com.qiangpiao.common.util.JwtTokenUtil;
 import com.qiangpiao.security.JwtAuthenticationFilter;
+import com.qiangpiao.service.TokenService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -68,8 +69,10 @@ public class SecurityConfig {
     }
 
     @Bean
-    public JwtAuthenticationFilter jwtAuthenticationFilter(JwtTokenUtil jwtTokenUtil) {
-        return new JwtAuthenticationFilter(jwtTokenUtil);
+    public JwtAuthenticationFilter jwtAuthenticationFilter(JwtTokenUtil jwtTokenUtil,
+                                                           TokenService tokenService) {
+        // TokenService：每次认证后查一次黑名单，让「登出 / 踢下线」能立即生效
+        return new JwtAuthenticationFilter(jwtTokenUtil, tokenService);
     }
 
     @Bean

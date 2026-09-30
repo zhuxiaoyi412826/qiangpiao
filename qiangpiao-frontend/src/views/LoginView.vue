@@ -32,6 +32,9 @@
             <el-form-item label="身份证号" prop="idCard">
               <el-input v-model="regForm.idCard" maxlength="18"/>
             </el-form-item>
+            <div class="whitelist-tip">
+              开发测试白名单：身份证 111111 开头、手机号 111 开头可跳过格式校验（上线前关闭）
+            </div>
             <el-button type="success" class="submit-btn" :loading="loading" @click="submitRegister">注册并登录</el-button>
           </el-form>
         </el-tab-pane>
@@ -46,6 +49,7 @@ import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/store/user'
+import { validPhone, validIdCard } from '@/utils/validators'
 
 const route = useRoute()
 const router = useRouter()
@@ -67,8 +71,20 @@ const regRules = {
   username: [{ required: true, min: 2, max: 32, message: '用户名 2~32 位', trigger: 'blur' }],
   password: [{ required: true, min: 6, max: 32, message: '密码 6~32 位', trigger: 'blur' }],
   realName: [{ required: true, message: '请输入真实姓名', trigger: 'blur' }],
-  phone: [{ pattern: /^1[3-9]\d{9}$/, message: '手机号格式不正确', trigger: 'blur' }],
-  idCard: [{ pattern: /^(\d{17}[0-9Xx]|\d{15})$/, message: '身份证号格式不正确', trigger: 'blur' }]
+  phone: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    { validator: (rule, value, cb) => (validPhone(value) ? cb() : cb(new Error('手机号格式不正确（11 位且号段有效）'))), trigger: 'blur' }
+  ],
+  // 身份证选填，填了就必须合规：位数 + 校验位 + 出生日期
+  idCard: [
+    {
+      validator: (rule, value, cb) => {
+        if (!value) return cb()
+        return validIdCard(value) ? cb() : cb(new Error('身份证号不正确（校验位或出生日期不合法）'))
+      },
+      trigger: 'blur'
+    }
+  ]
 }
 
 async function submitLogin() {
@@ -97,6 +113,13 @@ async function submitRegister() {
 </script>
 
 <style scoped>
+.whitelist-tip {
+  margin: 0 0 10px;
+  color: #e6a23c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .login-page {
   min-height: calc(100vh - 60px);
   display: flex;

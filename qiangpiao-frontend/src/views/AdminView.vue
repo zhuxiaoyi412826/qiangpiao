@@ -109,7 +109,7 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="300" fixed="right">
+            <el-table-column label="操作" width="420" fixed="right">
               <template #default="{ row }">
                 <el-button link :type="row.status === 1 ? 'danger' : 'success'" size="small"
                            @click="toggleTrain(row)">
@@ -118,6 +118,8 @@
                 <el-button link type="primary" size="small" @click="openSchedule(row)">生成班次</el-button>
                 <el-button link type="warning" size="small" @click="openStops(row)">时刻表</el-button>
                 <el-button link type="warning" size="small" @click="openCarriages(row)">车厢</el-button>
+                <el-button link type="info" size="small" @click="openSaleWindow(row)">售卖窗口</el-button>
+                <el-button link type="info" size="small" @click="initSegments(row)">区间库存</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -222,6 +224,47 @@
                          @current-change="p => { orderQuery.pageNum = p; loadOrders() }"/>
         </el-tab-pane>
 
+        <!-- 抢票流水 -->
+        <el-tab-pane label="抢票流水" name="flows">
+          <el-form :inline="true" size="small" @submit.prevent>
+            <el-form-item label="用户ID">
+              <el-input v-model="flowQuery.userId" clearable style="width: 140px" placeholder="如 1"/>
+            </el-form-item>
+            <el-form-item label="车次ID">
+              <el-input v-model="flowQuery.trainId" clearable style="width: 140px"/>
+            </el-form-item>
+            <el-form-item label="状态">
+              <el-select v-model="flowQuery.status" clearable style="width: 120px" placeholder="全部">
+                <el-option label="排队中" :value="0"/>
+                <el-option label="成功" :value="1"/>
+                <el-option label="失败" :value="2"/>
+              </el-select>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" size="small" @click="reloadFlows">查询</el-button>
+            </el-form-item>
+          </el-form>
+          <el-table :data="flows" border size="small" class="mt">
+            <el-table-column prop="orderNo" label="订单号" min-width="180"/>
+            <el-table-column prop="userId" label="用户" width="80"/>
+            <el-table-column prop="trainId" label="车次ID" width="90"/>
+            <el-table-column prop="passengerName" label="乘客" width="100"/>
+            <el-table-column prop="ticketIndex" label="第几张" width="80"/>
+            <el-table-column label="结果" width="110">
+              <template #default="{ row }">
+                <el-tag size="small" :type="flowStatusType(row.status)">{{ row.statusText }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="failReason" label="失败原因" min-width="180"/>
+            <el-table-column prop="queueSeq" label="排队号" width="80"/>
+            <el-table-column prop="costMs" label="耗时(ms)" width="90"/>
+            <el-table-column prop="createTime" label="受理时间" width="180"/>
+          </el-table>
+          <el-pagination class="pager" background layout="total, prev, pager, next"
+                         :current-page="flowQuery.pageNum" :page-size="flowQuery.pageSize" :total="flowTotal"
+                         @current-change="p => { flowQuery.pageNum = p; loadFlows() }"/>
+        </el-tab-pane>
+
         <!-- 用户 -->
         <el-tab-pane label="用户管理" name="users">
           <el-form :inline="true" size="small" @submit.prevent>
@@ -246,12 +289,13 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="140">
+            <el-table-column label="操作" width="220">
               <template #default="{ row }">
                 <el-button link :type="row.status === 1 ? 'danger' : 'success'" size="small"
                            @click="toggleUser(row)">
                   {{ row.status === 1 ? '封禁' : '解封' }}
                 </el-button>
+                <el-button link type="warning" size="small" @click="kickOffline(row)">强制下线</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -309,6 +353,39 @@
             <el-table-column prop="seatNo" label="座位" width="90"/>
             <el-table-column prop="orderNo" label="占用订单" min-width="220"/>
             <el-table-column prop="updateTime" label="锁定时间" width="180"/>
+          </el-table>
+        </el-tab-pane>
+
+        <!-- 风控 -->
+        <el-tab-pane label="风控管理" name="risk">
+          <el-divider content-position="left">IP 黑名单</el-divider>
+          <el-form :inline="true" size="small" @submit.prevent>
+            <el-form-item label="IP">
+              <el-input v-model="blockForm.ip" placeholder="如 1.2.3.4" style="width: 180px"/>
+            </el-form-item>
+            <el-form-item label="时长(秒)">
+              <el-input-number v-model="blockForm.seconds" :min="60" :step="60" style="width: 150px"/>
+            </el-form-item>
+            <el-form-item label="原因">
+              <el-input v-model="blockForm.reason" placeholder="选填" style="width: 220px"/>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="danger" size="small" @click="doBlockIp">拉黑</el-button>
+            </el-form-item>
+          </el-form>
+          <el-table :data="blacklist" border size="small">
+            <el-table-column prop="ip" label="IP" width="160"/>
+            <el-table-column prop="reason" label="原因 / 解封时间" min-width="320"/>
+            <el-table-column label="操作" width="100">
+              <template #default="{ row }">
+                <el-button link type="success" size="small" @click="doUnblockIp(row.ip)">解除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <el-divider content-position="left">风控事件（同一 IP 多账号 / 极短耗时请求）</el-divider>
+          <el-table :data="riskEvents" border size="small" max-height="360">
+            <el-table-column prop="text" label="事件" min-width="520"/>
           </el-table>
         </el-tab-pane>
       </el-tabs>
@@ -377,6 +454,23 @@
       <template #footer>
         <el-button @click="lineStationVisible = false">取消</el-button>
         <el-button type="primary" @click="submitLineStations">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 售卖时间窗口 -->
+    <el-dialog v-model="saleWindowVisible" title="设置售卖时间窗口" width="440px">
+      <p class="muted">窗口外不允许抢票 / 下单；两栏都留空表示不限时（默认一直卖）。</p>
+      <el-form label-width="96px" size="small">
+        <el-form-item label="开始时间">
+          <el-input v-model="saleWindowForm.start" placeholder="yyyy-MM-dd HH:mm:ss，留空=不限"/>
+        </el-form-item>
+        <el-form-item label="结束时间">
+          <el-input v-model="saleWindowForm.end" placeholder="yyyy-MM-dd HH:mm:ss，留空=不限"/>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="saleWindowVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitSaleWindow">保存</el-button>
       </template>
     </el-dialog>
 
@@ -607,6 +701,11 @@ const currentOrder = ref(null)
 const orderLogs = ref([])
 const orderChanges = ref([])
 
+// 抢票流水（排查超卖 / 抢票失败用）
+const flows = ref([])
+const flowTotal = ref(0)
+const flowQuery = ref({ userId: null, trainId: null, status: null, pageNum: 1, pageSize: 10 })
+
 // 用户
 const users = ref([])
 const userTotal = ref(0)
@@ -621,6 +720,11 @@ const noticeForm = ref({})
 // 监控
 const lockedSeats = ref([])
 
+// 风控（IP 黑名单 + 风控事件）
+const blacklist = ref([])
+const riskEvents = ref([])
+const blockForm = ref({ ip: '', seconds: 1800, reason: '' })
+
 // 后台数据量大（车次 2700 / 库存 8000 / 车站 3000），首屏只加载当前页签，切页签时再加载
 const loadedTabs = ref(new Set())
 const TAB_LOADERS = {
@@ -632,7 +736,8 @@ const TAB_LOADERS = {
   orders: loadOrders,
   users: loadUsers,
   notice: loadNotices,
-  monitor: loadLocked
+  monitor: loadLocked,
+  risk: loadRisk
 }
 
 async function ensureTab(name) {
@@ -650,6 +755,42 @@ watch(tab, v => {
 })
 
 // ============ 数据加载 ============
+async function loadRisk() {
+  try {
+    const map = await api.adminBlacklist()
+    blacklist.value = Object.keys(map || {}).map(ip => ({ ip, reason: map[ip] }))
+    const list = await api.adminRiskEvents(50)
+    riskEvents.value = (list || []).map(text => ({ text }))
+  } catch (e) {
+    ElMessage.error(e.message || '风控数据加载失败')
+  }
+}
+
+async function doBlockIp() {
+  if (!blockForm.value.ip) {
+    return ElMessage.warning('请输入要拉黑的 IP')
+  }
+  try {
+    await api.adminBlockIp(blockForm.value.ip, blockForm.value.seconds, blockForm.value.reason)
+    ElMessage.success('已拉黑该 IP')
+    blockForm.value.ip = ''
+    blockForm.value.reason = ''
+    await loadRisk()
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+async function doUnblockIp(ip) {
+  try {
+    await api.adminUnblockIp(ip)
+    ElMessage.success('已解除拉黑')
+    await loadRisk()
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
 async function loadStats() {
   try {
     stats.value = await api.adminStats()
@@ -693,6 +834,23 @@ async function loadOrders() {
     orderTotal.value = data.total || 0
   } catch (e) { ElMessage.error(e.message) }
 }
+async function loadFlows() {
+  try {
+    const data = await api.adminSeckillFlows(flowQuery.value)
+    flows.value = data.list || []
+    flowTotal.value = data.total || 0
+  } catch (e) { ElMessage.error(e.message) }
+}
+function reloadFlows() {
+  flowQuery.value.pageNum = 1
+  loadFlows()
+}
+function flowStatusType(status) {
+  if (status === 1) return 'success'
+  if (status === 2) return 'danger'
+  return 'info'
+}
+
 async function loadUsers() {
   try {
     const data = await api.adminUsers({ keyword: userKeyword.value, pageNum: userPage.value, pageSize: 10 })
@@ -768,6 +926,34 @@ async function submitLineStations() {
 }
 
 // ============ 车次 ============
+// 售卖时间窗口（区间票 / 限时售卖）
+const saleWindowVisible = ref(false)
+const saleWindowForm = ref({ start: '', end: '' })
+
+function openSaleWindow(row) {
+  currentTrain.value = row
+  saleWindowForm.value = { start: '', end: '' }
+  saleWindowVisible.value = true
+}
+
+async function submitSaleWindow() {
+  await api.updateSaleWindow(currentTrain.value.id,
+      saleWindowForm.value.start, saleWindowForm.value.end)
+  ElMessage.success('售卖时间窗口已更新')
+  saleWindowVisible.value = false
+  loadTrains()
+}
+
+/** 初始化该车次的区间库存（相邻站单段）并预热到 Redis */
+async function initSegments(row) {
+  try {
+    const n = await api.initSegmentStock(row.id)
+    ElMessage.success(`已初始化 ${n} 个区间库存段`)
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
 async function toggleTrain(row) {
   await api.updateTrainStatus(row.id, row.status === 1 ? 0 : 1)
   ElMessage.success(row.status === 1 ? '已停开该班次' : '已恢复售票')
@@ -839,8 +1025,23 @@ async function adminRefund(row) {
 // ============ 用户 ============
 async function toggleUser(row) {
   await api.updateUserStatus(row.id, row.status === 1 ? 0 : 1)
-  ElMessage.success(row.status === 1 ? '已封禁' : '已解封')
+  ElMessage.success(row.status === 1 ? '已封禁（已同步踢下线）' : '已解封')
   loadUsers()
+}
+
+/** 强制下线：拉黑该用户所有 token，对方下一次请求即 401 */
+async function kickOffline(row) {
+  try {
+    await ElMessageBox.confirm(`确定将 ${row.username} 强制下线吗？其所有登录端会立即失效。`, '提示', { type: 'warning' })
+  } catch (e) {
+    return
+  }
+  try {
+    const n = await api.kickUser(row.id)
+    ElMessage.success(n > 0 ? `已强制下线，失效 ${n} 个登录态` : '该用户当前没有在线登录态')
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
 }
 
 // ============ 公告 ============

@@ -55,4 +55,10 @@ public class OrderVO implements Serializable {
     private LocalDateTime createTime;
     @ApiModelProperty("支付截止时间")
     private LocalDateTime expireTime;
+    @ApiModelProperty("退票手续费（已退票时有效）")
+    private BigDecimal refundFee;
+    @ApiModelProperty("实退金额（已退票时有效）")
+    private BigDecimal refundAmount;
+    @ApiModelProperty("是否改签过：0-否 1-是")
+    private Integer changed;
 }

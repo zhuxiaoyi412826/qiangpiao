@@ -2,17 +2,17 @@ package com.qiangpiao.service.impl;
 
 import com.qiangpiao.bo.TrainBO;
 import com.qiangpiao.common.constant.Constants;
+import com.qiangpiao.common.constant.OrderAction;
 import com.qiangpiao.common.constant.RedisKeys;
 import com.qiangpiao.common.exception.BizException;
 import com.qiangpiao.common.result.ResultCode;
 import com.qiangpiao.common.util.PaymentSignUtil;
 import com.qiangpiao.common.util.TraceContext;
 import com.qiangpiao.dataobject.OrderDO;
-import com.qiangpiao.dataobject.OrderLogDO;
 import com.qiangpiao.dataobject.PaymentDO;
-import com.qiangpiao.mapper.AdminMapper;
 import com.qiangpiao.mapper.OrderMapper;
 import com.qiangpiao.mapper.PaymentMapper;
+import com.qiangpiao.service.OrderLogService;
 import com.qiangpiao.service.PaymentService;
 import com.qiangpiao.service.TrainService;
 import com.qiangpiao.service.WalletService;
@@ -60,7 +60,7 @@ public class PaymentServiceImpl implements PaymentService {
 
     private final PaymentMapper paymentMapper;
     private final OrderMapper orderMapper;
-    private final AdminMapper adminMapper;
+    private final OrderLogService orderLogService;
     private final TrainService trainService;
     private final WalletService walletService;
     private final StringRedisTemplate stringRedisTemplate;
@@ -156,8 +156,8 @@ public class PaymentServiceImpl implements PaymentService {
         // 模拟渠道：事务提交后延迟触发异步回调（真实渠道由对方服务器回调 /notify）
         scheduleMockCallback(payment.getPayNo(), RESULT_SUCCESS);
 
-        appendOrderLog(orderNo, "PAY_CREATE", "发起支付",
-                "支付单 " + payment.getPayNo() + " 已创建，金额 " + amount + " 元，等待渠道回调",
+        orderLogService.log(orderNo, OrderAction.PAY_CREATE,
+                "支付单 " + payment.getPayNo() + " 已创建，金额 " + amount + " 元，方式 " + type + "，等待渠道回调",
                 String.valueOf(order.getUserId()));
         log.info("发起支付成功：payNo={}, orderNo={}, userId={}, amount={}, payType={}",
                 payment.getPayNo(), orderNo, order.getUserId(), amount, type);
@@ -240,6 +240,8 @@ public class PaymentServiceImpl implements PaymentService {
         // 6. 支付单已超时：不再入账，直接关闭
         if (payment.getExpireTime() != null && payment.getExpireTime().isBefore(LocalDateTime.now())) {
             paymentMapper.markClosed(payNo, "支付单已超时");
+            orderLogService.log(payment.getOrderNo(), OrderAction.PAY_CLOSE,
+                    "支付单 " + payNo + " 超过有效期后才收到回调，已关闭未入账", String.valueOf(payment.getUserId()));
             log.warn("支付单超时后才收到回调，已关闭：payNo={}", payNo);
             return true;
         }
@@ -263,7 +265,7 @@ public class PaymentServiceImpl implements PaymentService {
             }
         } else {
             paymentMapper.markFailed(payNo, "渠道返回支付失败：" + result);
-            appendOrderLog(payment.getOrderNo(), "PAY_FAIL", "支付失败",
+            orderLogService.log(payment.getOrderNo(), OrderAction.PAY_FAIL,
                     "支付单 " + payNo + " 渠道返回 " + result + "，订单仍待支付，可重新发起",
                     String.valueOf(payment.getUserId()));
             log.info("支付失败：payNo={}, orderNo={}, result={}", payNo, payment.getOrderNo(), result);
@@ -286,7 +288,7 @@ public class PaymentServiceImpl implements PaymentService {
             // 订单已被取消 / 超时 / 已支付：不扣款，支付单标记为失败，留痕供对账
             String text = OrderServiceImpl.statusText(order.getStatus());
             paymentMapper.markFailed(payment.getPayNo(), "订单状态已变更为" + text + "，未扣款");
-            appendOrderLog(payment.getOrderNo(), "PAY_ABNORMAL", "支付回调异常",
+            orderLogService.log(payment.getOrderNo(), OrderAction.PAY_ABNORMAL,
                     "支付单 " + payment.getPayNo() + " 回调成功，但订单已" + text + "，未扣用户钱包，请人工核对",
                     String.valueOf(order.getUserId()));
             log.warn("支付回调时订单状态异常：payNo={}, orderNo={}, orderStatus={}",
@@ -308,7 +310,7 @@ public class PaymentServiceImpl implements PaymentService {
         if (rows <= 0) {
             throw new BizException(ResultCode.ORDER_PAY_FAILED);
         }
-        appendOrderLog(payment.getOrderNo(), "PAY", "支付成功",
+        orderLogService.log(payment.getOrderNo(), OrderAction.PAY,
                 "支付单 " + payment.getPayNo() + " 扣款 " + order.getPrice() + " 元，钱包余额 " + balance,
                 String.valueOf(order.getUserId()));
         log.info("支付回调入账成功：payNo={}, orderNo={}, 扣款={}, 钱包余额={}",
@@ -339,6 +341,9 @@ public class PaymentServiceImpl implements PaymentService {
         try {
             int rows = paymentMapper.closeByOrderNo(orderNo, reason);
             if (rows > 0) {
+                // 与关单同事务：取消 / 超时关单后支付单被关闭，后续回调命中幂等不会误入账
+                orderLogService.log(orderNo, OrderAction.PAY_CLOSE,
+                        "关闭支付单 " + rows + " 笔，原因：" + reason + "，后续回调不会入账", "system");
                 log.info("关闭支付单：orderNo={}, 笔数={}, 原因={}", orderNo, rows, reason);
             }
         } catch (Exception e) {
@@ -430,20 +435,7 @@ public class PaymentServiceImpl implements PaymentService {
         }
     }
 
-    private void appendOrderLog(String orderNo, String action, String actionText, String detail, String operator) {
-        try {
-            OrderLogDO logDO = new OrderLogDO();
-            logDO.setOrderNo(orderNo);
-            logDO.setAction(action);
-            logDO.setActionText(actionText);
-            logDO.setDetail(detail);
-            logDO.setOperator(operator);
-            logDO.setTraceId(TraceContext.traceId());
-            adminMapper.insertOrderLog(logDO);
-        } catch (Exception e) {
-            log.warn("写入订单流转日志失败：orderNo={}, msg={}", orderNo, e.getMessage());
-        }
-    }
+
 
     private String str(Object value) {
         return value == null ? "" : String.valueOf(value);

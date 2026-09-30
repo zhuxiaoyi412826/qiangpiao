@@ -27,5 +27,7 @@ public class WalletFlowDO {
     private BigDecimal amount;
     private BigDecimal balance;
     private String remark;
+    /** 幂等键：退款类操作防重复入账（t_wallet_flow.idempotent_key 唯一索引兜底） */
+    private String idempotentKey;
     private LocalDateTime createTime;
 }

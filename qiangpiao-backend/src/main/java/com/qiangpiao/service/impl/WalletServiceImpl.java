@@ -102,9 +102,35 @@ public class WalletServiceImpl implements WalletService {
         getOrCreate(userId);
         walletMapper.increaseBalance(userId, back);
         WalletDO updated = walletMapper.selectByUserId(userId);
-        insertFlow(userId, bizNo, Constants.WALLET_FLOW_REFUND, title, detail, back, updated.getBalance(), null);
+        insertFlow(userId, bizNo, Constants.WALLET_FLOW_REFUND, title, detail, back, updated.getBalance(), null, null);
         log.info("退票退款入账：userId={}, bizNo={}, amount={}, balance={}",
                 userId, bizNo, back, updated.getBalance());
+        return updated.getBalance();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public BigDecimal refundOnce(Long userId, BigDecimal amount, String idempotentKey,
+                                String bizNo, String title, String detail) {
+        // 幂等第一道：流水已存在说明这笔账已退过，直接返回当时余额快照
+        if (org.springframework.util.StringUtils.hasText(idempotentKey)) {
+            WalletFlowDO exist = walletFlowMapper.selectByIdempotentKey(idempotentKey);
+            if (exist != null) {
+                log.info("退款幂等命中，跳过重复入账：key={}, flowNo={}, amount={}",
+                        idempotentKey, exist.getFlowNo(), exist.getAmount());
+                return exist.getBalance();
+            }
+        }
+        BigDecimal back = normalize(amount);
+        getOrCreate(userId);
+        walletMapper.increaseBalance(userId, back);
+        WalletDO updated = walletMapper.selectByUserId(userId);
+        // 幂等第二道：并发下由 t_wallet_flow.idempotent_key 唯一索引兜底，
+        // 后到的请求抛 DuplicateKeyException → 当前事务回滚，余额不会多加
+        insertFlow(userId, bizNo, Constants.WALLET_FLOW_REFUND, title, detail, back,
+                updated.getBalance(), null, idempotentKey);
+        log.info("退票退款入账（幂等）：userId={}, bizNo={}, key={}, amount={}, balance={}",
+                userId, bizNo, idempotentKey, back, updated.getBalance());
         return updated.getBalance();
     }
 
@@ -173,6 +199,11 @@ public class WalletServiceImpl implements WalletService {
 
     private void insertFlow(Long userId, String bizNo, Integer type, String title, String detail,
                             BigDecimal amount, BigDecimal balance, String remark) {
+        insertFlow(userId, bizNo, type, title, detail, amount, balance, remark, null);
+    }
+
+    private void insertFlow(Long userId, String bizNo, Integer type, String title, String detail,
+                            BigDecimal amount, BigDecimal balance, String remark, String idempotentKey) {
         WalletFlowDO flow = new WalletFlowDO();
         flow.setFlowNo(OrderNoGenerator.generate(userId));
         flow.setUserId(userId);
@@ -183,6 +214,7 @@ public class WalletServiceImpl implements WalletService {
         flow.setAmount(normalize(amount));
         flow.setBalance(normalize(balance));
         flow.setRemark(remark);
+        flow.setIdempotentKey(idempotentKey);
         walletFlowMapper.insert(flow);
     }
 

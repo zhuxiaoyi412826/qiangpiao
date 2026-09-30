@@ -92,6 +92,8 @@ CREATE TABLE IF NOT EXISTS t_order_change (
     old_seat_no   VARCHAR(16)   DEFAULT NULL COMMENT '原座位',
     new_seat_no   VARCHAR(16)   DEFAULT NULL COMMENT '新座位',
     diff_amount   DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT '差额（补款为正，退款为负）',
+    change_fee    DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT '改签手续费（退还差额按阶梯退票费计收）',
+    fee_rule      VARCHAR(64)   DEFAULT NULL COMMENT '本次改签计费档位说明',
     reason        VARCHAR(255)  DEFAULT NULL COMMENT '改签原因',
     create_time   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     KEY idx_order (order_no),

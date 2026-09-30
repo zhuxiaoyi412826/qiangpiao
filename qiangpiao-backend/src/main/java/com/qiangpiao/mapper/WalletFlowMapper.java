@@ -12,6 +12,9 @@ public interface WalletFlowMapper {
 
     int insert(WalletFlowDO flow);
 
+    /** 按幂等键查流水：退款防重复入账 */
+    WalletFlowDO selectByIdempotentKey(@Param("idempotentKey") String idempotentKey);
+
     List<WalletFlowDO> selectByUserId(@Param("userId") Long userId,
                                       @Param("offset") long offset,
                                       @Param("limit") long limit);

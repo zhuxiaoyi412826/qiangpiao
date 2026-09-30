@@ -5,7 +5,8 @@
 
     <sql id="Base_Column_List">
         id, train_no, train_type, from_station_id, from_station_name, to_station_id, to_station_name,
-        depart_date, depart_time, arrive_time, duration_minutes, status, create_time, update_time
+        depart_date, depart_time, arrive_time, duration_minutes, status, sale_start_time, sale_end_time,
+        create_time, update_time
     </sql>
 
     <select id="selectById" resultType="com.qiangpiao.dataobject.TrainDO">
@@ -54,6 +55,49 @@
         <if test="departDate != null">
             AND depart_date = #{departDate}
         </if>
+        AND (
+        <include refid="Not_Departed_Condition"/>
+        )
+    </select>
+
+    <!--
+      区间票查询：车次的经停站里同时包含上车站与下车站，且上车站顺序靠前。
+      没配时刻表的车次查不到（此时调用方会回退到「始发站 → 终点站」匹配）。
+    -->
+    <select id="selectBySegment" resultType="com.qiangpiao.dataobject.TrainDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_train t
+        WHERE t.status = 1
+        <if test="departDate != null">
+            AND t.depart_date = #{departDate}
+        </if>
+        AND EXISTS (SELECT 1 FROM t_train_stop a
+        WHERE a.train_id = t.id AND a.station_name = #{fromStation})
+        AND EXISTS (SELECT 1 FROM t_train_stop b
+        WHERE b.train_id = t.id AND b.station_name = #{toStation}
+        AND b.stop_order &gt; (SELECT MIN(a2.stop_order) FROM t_train_stop a2
+        WHERE a2.train_id = t.id AND a2.station_name = #{fromStation}))
+        AND (
+        <include refid="Not_Departed_Condition"/>
+        )
+        ORDER BY t.depart_time
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countBySegment" resultType="long">
+        SELECT COUNT(1)
+        FROM t_train t
+        WHERE t.status = 1
+        <if test="departDate != null">
+            AND t.depart_date = #{departDate}
+        </if>
+        AND EXISTS (SELECT 1 FROM t_train_stop a
+        WHERE a.train_id = t.id AND a.station_name = #{fromStation})
+        AND EXISTS (SELECT 1 FROM t_train_stop b
+        WHERE b.train_id = t.id AND b.station_name = #{toStation}
+        AND b.stop_order &gt; (SELECT MIN(a2.stop_order) FROM t_train_stop a2
+        WHERE a2.train_id = t.id AND a2.station_name = #{fromStation}))
         AND (
         <include refid="Not_Departed_Condition"/>
         )
@@ -124,8 +168,10 @@
     <insert id="insert" parameterType="com.qiangpiao.dataobject.TrainDO"
             useGeneratedKeys="true" keyProperty="id">
         INSERT INTO t_train (train_no, train_type, from_station_id, from_station_name, to_station_id, to_station_name,
-                             depart_date, depart_time, arrive_time, duration_minutes, status, create_time, update_time)
+                             depart_date, depart_time, arrive_time, duration_minutes, status,
+                             sale_start_time, sale_end_time, create_time, update_time)
         VALUES (#{trainNo}, #{trainType}, #{fromStationId}, #{fromStationName}, #{toStationId}, #{toStationName},
-                #{departDate}, #{departTime}, #{arriveTime}, #{durationMinutes}, #{status}, NOW(), NOW())
+                #{departDate}, #{departTime}, #{arriveTime}, #{durationMinutes}, #{status},
+                #{saleStartTime}, #{saleEndTime}, NOW(), NOW())
     </insert>
 </mapper>

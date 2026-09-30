@@ -1,6 +1,7 @@
 package com.qiangpiao.config;
 
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.qiangpiao.interceptor.BlackIpInterceptor;
 import com.qiangpiao.interceptor.TraceIdInterceptor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -31,15 +32,19 @@ import java.util.List;
 public class WebMvcConfig implements WebMvcConfigurer {
 
     private final TraceIdInterceptor traceIdInterceptor;
+    private final BlackIpInterceptor blackIpInterceptor;
 
-    public WebMvcConfig(TraceIdInterceptor traceIdInterceptor) {
+    public WebMvcConfig(TraceIdInterceptor traceIdInterceptor, BlackIpInterceptor blackIpInterceptor) {
         this.traceIdInterceptor = traceIdInterceptor;
+        this.blackIpInterceptor = blackIpInterceptor;
     }
 
     @Override
     public void addInterceptors(org.springframework.web.servlet.config.annotation.InterceptorRegistry registry) {
         // 请求入口生成 traceId 写入 MDC，串联整条业务日志
         registry.addInterceptor(traceIdInterceptor).addPathPatterns("/**");
+        // 黑名单 IP 在入口直接拒绝
+        registry.addInterceptor(blackIpInterceptor).addPathPatterns("/**");
     }
 
     @Override

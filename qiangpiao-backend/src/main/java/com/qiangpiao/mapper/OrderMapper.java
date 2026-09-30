@@ -42,11 +42,15 @@ public interface OrderMapper {
 
     int countByTrainAndUser(@Param("trainId") Long trainId, @Param("userId") Long userId);
 
+    /** 同一车次同一乘车人（身份证密文）已购有效票数：防止同一人在同一车次买多张 */
+    int countByTrainAndIdCard(@Param("trainId") Long trainId, @Param("idCard") String idCard);
+
     /**
      * 查询用户在指定时间区间内已存在的有效订单（待支付 / 已支付），用于「行程运行时间冲突」校验。
      * 区间重叠判定：已有车次发车时刻 &lt; 目标到达时刻 且 已有车次到达时刻 &gt; 目标发车时刻。
      */
     List<Map<String, Object>> selectTripConflicts(@Param("userId") Long userId,
                                                   @Param("start") LocalDateTime start,
-                                                  @Param("end") LocalDateTime end);
+                                                  @Param("end") LocalDateTime end,
+                                                  @Param("excludeTrainId") Long excludeTrainId);
 }
