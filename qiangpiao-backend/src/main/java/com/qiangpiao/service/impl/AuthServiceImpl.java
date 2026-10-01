@@ -12,6 +12,7 @@ import com.qiangpiao.dto.RegisterDTO;
 import com.qiangpiao.mapper.UserMapper;
 import com.qiangpiao.service.AuthService;
 import com.qiangpiao.service.TokenService;
+import com.qiangpiao.service.WalletService;
 import com.qiangpiao.vo.LoginVO;
 import com.qiangpiao.vo.UserVO;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +21,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 
@@ -36,9 +38,14 @@ public class AuthServiceImpl implements AuthService {
     private final JwtTokenUtil jwtTokenUtil;
     private final SensitiveCrypto crypto;
     private final TokenService tokenService;
+    private final WalletService walletService;
 
     @Value("${jwt.expiration}")
     private long expiration;
+
+    /** 新用户注册即赠送的钱包初始余额（元），配置见 config.properties */
+    @Value("${wallet.register-gift-amount:1000.00}")
+    private BigDecimal registerGiftAmount;
 
     @Override
     public LoginVO login(LoginDTO loginDTO, String ip) {
@@ -81,6 +88,12 @@ public class AuthServiceImpl implements AuthService {
         user.setStatus(Constants.USER_STATUS_NORMAL);
         userMapper.insert(user);
         log.info("用户注册成功：userId={}, username={}, ip={}", user.getId(), user.getUsername(), ip);
+        // 注册即自动开通钱包 + 赠送初始余额；赠送失败不影响注册结果（用户已创建）
+        try {
+            walletService.grantRegisterGift(user.getId(), registerGiftAmount);
+        } catch (Exception e) {
+            log.error("注册礼包发放失败，用户已创建：userId={}, msg={}", user.getId(), e.getMessage());
+        }
         return buildLoginVO(user);
     }
 

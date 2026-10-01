@@ -1,13 +1,56 @@
 # 火车票秒杀抢票系统
 
-基于 **SSM（Spring + SpringMVC + MyBatis）** 的火车票购票 / 秒杀演示项目，**前后端分离**，分为两个模块：
+基于 **SSM（Spring + SpringMVC + MyBatis）** 的火车票购票 / 秒杀演示项目，**前后端分离**
 
 | 模块 | 说明 | 打包方式 |
 | --- | --- | --- |
-| `qiangpiao-backend` | 后端 SSM 服务，纯注解配置，**打 war 包部署到 Tomcat** | `war`（`finalName=qiangpiao`，上下文 `/qiangpiao`） |
+| `qiangpiao-backend` | 后端 SSM 服务，纯注解配置，**打 war 包部署到 Tomcat** | `war`（`finalName=/`，上下文 `/`） |
 | `qiangpiao-frontend` | Vue3 + Vite 前端，独立运行 / Nginx 部署 | 静态资源 `dist` |
 
-实现功能：车次查询、余票与座位图、车站字典、**JWT 登录鉴权**、**Redis Lua 原子预扣库存秒杀抢票**、异步下单、**钱包余额支付 / 零钱流水 / 自定义充值**、订单取消、超时关单、**L1/L2/L3 三级缓存**、接口文档（Knife4j）、Druid 监控。
+实现功能：车次查询、**区间票（同座位分段复用）**、余票与座位图（按乘车区间计算）、**车次售卖时间窗**、车站字典、**JWT 登录鉴权 + 登出 / 强制下线（Redis token 黑名单）**、**Redis Lua 原子预扣库存秒杀抢票**、异步下单、**SSE 抢票结果推送（轮询兜底）**、**钱包余额支付 / 零钱流水 / 自定义充值**、订单取消、超时关单、退票改签、**L1/L2/L3 三级缓存**、**全链路 traceId 追踪**、IP 黑名单与风控、接口文档（Knife4j）、Druid 监控。
+
+## 功能实现
+
+### **C 端用户功能**
+
+| 模块       | 功能描述                                                     |
+| ---------- | ------------------------------------------------------------ |
+| 账号       | 注册（手机号号段 + 身份证校验位双重校验）、登录（BCrypt + JWT）、登出（token 进 Redis 黑名单，立即失效）、当前用户信息 |
+| 常用乘车人 | 增删改查，最多 9 位、同身份证查重、AES 加密存储 + 脱敏返回   |
+| 车次查询   | 分页、OD 站点查询（支持中途站→中途站）、30 天范围、三级缓存  |
+| 车次详情   | 余票、按乘车区间计算的余票与区间座位图、经停站时刻表、购票资格预检  **问题** |
+| 抢票秒杀   | 限流 → 限购 → Redis Lua 原子预扣 → 异步落库；一次最多买 9 张（多乘客）；排队序号；SSE 毫秒级推送结果（轮询兜底）；抢票流水 |
+| 订单       | 列表分页、详情（身份证脱敏）、钱包支付、取消（释放座位 + 归还库存）、超时自动关单 |
+| 我的车票   | 待出行 / 历史车票分类、票态（待出行 / 已出行 / 已失效）、距发车天数 |
+| 退票       | 已支付且未发车可退，票款退钱包；开车后不可退（4011）、改签过的票开车后不可退（4012）、发车次日起不可退（4016） |
+| 改签       | 换到未发车有余票的车次，差额多退少补；一张票只能改签一次；改签历史 + 订单流转时间轴 |
+| 钱包       | 余额、累计充值 / 消费、自定义金额充值（0.01~50000）、零钱流水（充值 / 消费 / 退款） |
+| 支付       | 钱包余额扣款（同一事务）、支付回调验签 + nonce 防重放 + 时间戳窗口 |
+| 人机验证   | 图形验证码、滑块验证码（抢票前置，防脚本）                   |
+| 公告       | 免登录查看运营公告                                           |
+
+### 二、管理后台
+
+- 车次：停开班次、时刻表（经停站与到发时刻）、车厢编排、按日期生成每日班次、票价与总票数调整、售卖时间窗、区间库存
+- 初始化线路 / 车站：线路 CRUD + 途经站与顺序、车站停用启用
+- 订单：多条件筛选、详情、操作日志、改签记录、人工退票（客服）
+- 用户：封禁/解封（封禁同步踢下线）、强制下线（拉黑该用户所有 token）
+- 公告：发布/编辑/删除
+- 监控：实时余票、锁票情况
+- 报表：总览统计、日销售额、车次销量、用户增长、CSV 导出
+- 风控：风险事件流水、IP 黑名单（拉黑/解封）、秒杀流水查询
+
+### 三、售票业务规则
+
+预售期 14 天 / 查询范围 30 天、开车前 20 分钟停售、已发车不可售、每车次最多 9 张（不分席别）、同一乘车人不可重复购票、行程运行时间冲突不可购票（3007）、区间票同座位分段复用（区间余票取覆盖各段最小值）、区间票暂不支持改签（4017）
+
+### 四、高并发与基础设施
+
+三级缓存（L1 Caffeine / L2 Redis / L3 MySQL，防穿透 __NULL__、防击穿本地锁、防雪崩 TTL 抖动、写后双删）、Redis Lua 原子预扣与回滚、异步线程池落库 + 失败补偿、DB 乐观锁防超卖、用户/IP/全局三级限流、IP 黑名单拦截器、敏感数据 AES 加密 + 脱敏、traceId 全链路追踪（响应体/响应头/日志同值，异步线程 MDC 传递）、慢 SQL 与慢请求（>1s 转 WARN）日志、Druid 监控、Knife4j 文档、定时任务（库存预热 / 超时关单 / 每日班次生成）
+
+### 五、前端体验
+
+移动端适配（≤768px）、骨架屏、幂等 GET 自动重试 2 次（POST 下单支付绝不重试）、SSE 断开自动降级轮询、失败 toast 带 traceId、localStorage 缓存车站与查询结果
 
 ---
 
@@ -58,7 +101,9 @@ qiangpiao
 │     │  ├─ config/              # RootConfig(根容器) / WebMvcConfig(MVC子容器) / DataSourceConfig(Druid)
 │     │  │                       # MybatisConfig / RedisConfig(Lua脚本) / CacheConfig / SecurityConfig / AsyncConfig / SwaggerConfig
 │     │  ├─ controller/          # 7 个 REST Controller，全部 /api/** 前缀
+│     │  ├─ interceptor/         # TraceIdInterceptor(traceId+MDC) / BlackIpInterceptor(IP 黑名单) / SlowSqlInterceptor(慢 SQL)
 │     │  ├─ service/ + service/impl/   # 业务层，Service 之间传递 BO
+│     │  │                       # SegmentStockService(区间库存) / SeckillSseService(SSE 推送) / TokenService(token 黑名单)
 │     │  ├─ mapper/              # MyBatis 接口（SQL 在 resources/mapper/*.xml）
 │     │  ├─ dataobject/          # DO 数据库实体（注意包名是 dataobject）
 │     │  ├─ dto/                 # 入参 DTO，带 JSR-303 注解
@@ -71,10 +116,13 @@ qiangpiao
 │     │                          # constant(Constants, RedisKeys) / context(UserContext) / util / validate
 │     ├─ resources/
 │     │  ├─ config.properties    # 唯一外部化配置源（DB / Redis / 缓存 / JWT / 秒杀）
-│     │  ├─ logback.xml
+│     │  ├─ logback.xml          # PATTERN 带 %X{traceId} / %X{userId} / %X{orderNo}
 │     │  ├─ mapper/*.xml         # 7 个 MyBatis 映射文件
 │     │  └─ sql/schema.sql、sql/data.sql
 │     └─ webapp/WEB-INF/web.xml  # ContextLoaderListener + DispatcherServlet + Security/Druid 过滤器
+├─ scripts/
+│  ├─ import-data.js             # 生成车站 / 线路 / 车次导入 SQL（只生成不执行）
+│  └─ sql/                       # 生成的导入 SQL + segment_ticket.sql（区间票建表 / 加列 / 补经停站）
 └─ qiangpiao-frontend/
    ├─ vite.config.js             # dev 代理：/api → http://localhost:8081 + 上下文
    └─ src/
@@ -120,9 +168,11 @@ cd qiangpiao-backend/src/main/resources/sql
 mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS qiangpiao DEFAULT CHARACTER SET utf8mb4;"
 mysql -uroot -p qiangpiao < schema.sql
 mysql -uroot -p qiangpiao < data.sql
+mysql -uroot -p qiangpiao < schema_admin.sql
+# 存量库升级：手机号 / 身份证改为 AES 密文存储后必须扩列（密文 28~48 字符），
+# 否则注册 / 下单会报 Data truncation: Data too long for column 'phone'
+mysql -uroot -p qiangpiao < <项目根目录>/scripts/sql/encrypt_column_resize.sql
 ```
-
-`data.sql` 会写入：10 个车站、3 个用户、6 个车次、三档席别库存，并按真实座位数校准库存。
 
 ### 1.1 导入全量车站与公开高铁线路车次（可选但推荐）
 
@@ -153,7 +203,7 @@ mysql -uroot -p qiangpiao < scripts/sql/future_dates_import.sql  # 复制出未�
 
 ```properties
 jdbc.url=jdbc:mysql://127.0.0.1:3306/qiangpiao?...
-jdbc.username=root
+jdbc.username=你的账号
 jdbc.password=你的MySQL密码
 
 redis.host=127.0.0.1
@@ -180,9 +230,8 @@ mvn -B -pl qiangpiao-backend -am clean package -DskipTests
 ### 4. 部署到 Tomcat 9
 
 ```bash
-# war 名为 qiangpiao.war → 上下文路径为 /qiangpiao
+# war 名为 qiangpiao.war → 上下文路径为 /
 copy qiangpiao-backend\target\qiangpiao.war D:\software\tomcat\apache-tomcat-9.0.x\webapps\
-
 cd D:\software\tomcat\apache-tomcat-9.0.x\bin
 startup.bat
 ```
@@ -241,8 +290,8 @@ server {
 | 地址 | 期望 |
 | --- | --- |
 | `http://localhost:8081/qiangpiao/api/health` | `{"code":200,"data":{"status":"UP",...}}` |
-| `http://localhost:8081/qiangpiao/doc.html` | Knife4j 接口文档 |
-| `http://localhost:8081/qiangpiao/druid/index.html` | Druid 监控（admin / admin123） |
+| `http://localhost:8081/qiangpiao_backend_war/doc.html` | Knife4j 接口文档 |
+| `http://localhost:8081/qiangpiao_backend_war/druid/index.html` | Druid 监控（admin / admin123） |
 | `http://localhost:5174/trains` | 车次列表（免登录即可查看） |
 | `http://localhost:5174/wallet` | 我的钱包：余额 / 充值 / 零钱流水（需登录） |
 | `http://localhost:5174/tickets` | 我的车票：未开车（待出行）/ 历史车票（需登录） |
@@ -253,10 +302,10 @@ server {
 
 | 账号 | 密码 | 角色 | 说明 |
 | --- | --- | --- | --- |
-| `admin` | `123456` | ROLE_ADMIN | 重导 `data.sql` 后生效 |
-| `zhangsan` / `lisi` | `123456` | ROLE_USER | 同上 |
+| `admin` | `admin123` | ROLE_ADMIN | 重导 `data.sql` 后生效 |
+| `zhangsan` / `lisi` | `admin123` | ROLE_USER | 同上 |
 
-> 密码使用 **BCrypt** 存储。BCrypt 每次加密带随机盐，`data.sql` 中保存的是一条与 `123456` 匹配的合法密文；如果重新生成，`密文不同但同样能校验通过`。
+> 密码使用 **BCrypt** 存储。BCrypt 每次加密带随机盐，`data.sql` 中保存的是一条与 `admin123` 匹配的合法密文；如果重新生成，`密文不同但同样能校验通过`。
 > 若某些历史库是用旧脚本初始化的，`admin` 的口令可能为 `admin123`，重跑一次 `data.sql` 即会重置为 `123456`（`ON DUPLICATE KEY UPDATE` 已包含 `password = VALUES(password)`）。
 
 > 执行 `data.sql` 后会自动为所有用户**开通钱包并赠送 1000.00 元**初始余额（幂等，同时写入一条「开户赠送」流水）；购票支付即从该余额扣款，余额不足请到「我的钱包」自定义金额充值。
@@ -370,8 +419,13 @@ flowchart TB
 统一返回体 `R<T>`：
 
 ```json
-{ "code": 200, "message": "操作成功", "data": {}, "traceId": null, "timestamp": 1790181657341 }
+{ "code": 200, "message": "操作成功", "data": {}, "traceId": "3f2a9c8b1e7d4a05", "timestamp": 1790181657341 }
 ```
+
+**`traceId` 全链路追踪**：`TraceIdInterceptor` 在请求入口生成 16 位 ID 写入 MDC，`R.build()` 统一回填到响应体，
+同时写入响应头 `X-Trace-Id`，logback 通过 `%X{traceId}` 打进每一行业务日志 —— **响应体 / 响应头 / 日志三者同值**，
+用户报障只需给出这个 ID。成功与失败响应都带（全局异常处理器走同一个 `R.build()`）。
+秒杀下单跑在 `seckillExecutor` 线程池，靠 `MdcTaskDecorator` 把 traceId 带进异步线程，请求线程与落库线程可对账。
 
 `GlobalExceptionHandler`（`@RestControllerAdvice`）统一处理并转成对应状态码：
 
@@ -465,7 +519,7 @@ sequenceDiagram
 ### 6.4 秒杀抢票流程
 
 1. **限流**：`INCR qp:limit:user:{userId}`，超过 `seckill.user-limit`（默认 20 次/分钟）→ `429`
-2. **限购标记**：`SETNX qp:seckill:user:{trainId}:{userId}`（30min，**不分席别**），失败 → `3006 每人每天每车次限购 1 张`
+2. **限购额度**：`INCR qp:seckill:user:{trainId}:{userId}`（计数器，30min，**不分席别**），已购张数 + 本次张数 > 9 → `3006 每车次最多购买 9 张`（失败 / 取消 / 退票时 `DECR` 归还额度）
    - **DB 兜底**：Redis 标记 30min 过期后同步层就失去限购能力，因此紧接着再查一次
      `t_seckill_record(train_id, seat_type, user_id)`，命中抛 `3003`（取消/退票会删除该记录，故取消后可重买）
 3. **车次校验**：三级缓存取车次，判断是否在售；不可售则回滚步骤 2 的标记
@@ -488,7 +542,12 @@ sequenceDiagram
 5. **写结果 + 投递异步任务**：生成订单号写入 `qp:seckill:result:...`，立即返回 `QUEUEING`，由 `seckillExecutor` 线程池异步落库（core 20 / max 100 / queue 5000）
 6. **异步落库**：`INSERT IGNORE t_seckill_record`（唯一索引保证幂等）→ 乐观锁扣 `t_train_stock`（重试 3 次，防超卖最后防线）→ 乐观锁占座 `t_seat` → 建待支付订单（5 分钟过期）→ 失效缓存；**任一环节失败则补偿回滚**（Redis 库存 `INCR` + 删除一人一单标记 + **把失败原因写回结果 key，格式为 `FAIL:<原因>`**）
 
-前端通过 `GET /api/seckill/result` 轮询结果：`-1` 失败/售罄、`0` 排队中、`1` 成功（返回车厢座位号）。
+**结果获取（SSE 优先 + 轮询兜底）**：
+
+- 优先 `GET /api/seckill/stream?batchNo=&token=`（SSE 长连接）：订阅后毫秒级收到 `connected` → `seckill-result`（车厢座位号），不必空转轮询
+- 浏览器不支持 EventSource / 连接断开 / 订阅失败时，前端自动降级为 `GET /api/seckill/result` 轮询（1~2 秒一次）
+- 结果值：`-1` 失败或售罄、`0` 排队中、`1` 成功（返回车厢座位号）；一次买多张用 `GET /api/seckill/batch/result?batchNo=`
+- SSE 是长连接，无法带请求头，`token` 与 `traceId` 走 query 参数（`traceId` 与抢票请求共用，便于串链路）
 
 > ⚠️ **异步线程池里的异常不会走 `GlobalExceptionHandler`**
 > `@RestControllerAdvice` 只拦截 DispatcherServlet 线程内的异常。异步落库跑在 `seckillExecutor` 中，
@@ -563,8 +622,8 @@ sequenceDiagram
         Note over POOL,RDS: 补偿再失败 → 日志记录，需人工介入
     end
 
-    Note over FE,DB: 阶段三：前端轮询结果
-    loop 每 1~2 秒轮询
+    Note over FE,DB: 阶段三：结果获取（SSE 推送优先，轮询兜底）
+    loop 每 1~2 秒轮询（SSE 不可用时）
         FE->>PX: GET /api/seckill/result?trainId&seatType
         PX->>SKC: 转发
         SKC->>SKS: queryResult(...)
@@ -595,9 +654,21 @@ sequenceDiagram
 
   其余请求（`orders`、`seats`、`seckill`）必须登录；未登录返回 `{"code":401,"message":"未登录或登录已过期"}`，前端会自动清理 token 并跳转 `/login`
 - **管理员**：`@PreAuthorize("hasRole('ADMIN')")` 保护库存预热接口
+- **登出 / 强制下线（token 黑名单）**：JWT 签发后无法单独作废，用 Redis 黑名单补上这个能力
 
-### 6.6 定时任务
+  | 项 | 说明 |
+  | --- | --- |
+  | 登出 | `POST /api/auth/logout` → `qp:token:blacklist:{jti}`，**TTL = token 剩余有效期**（过期自动清理，不留垃圾） |
+  | 多端 | `qp:token:user:{userId}`（Set）记录该用户当前有效 token 的 jti，支持多端登录 |
+  | 踢下线 | `POST /api/admin/users/{id}/kick` 或后台「强制下线」按钮 → 批量拉黑，对方下一次请求即 401 |
+  | 校验 | `JwtAuthenticationFilter` 每次认证后查一次黑名单，命中即不放行（视为未登录） |
+  | 封号 | 后台改用户状态为「已封禁」时同步踢下线，不用等 token 自然过期 |
+  | 降级 | Redis 故障时黑名单降级为「放行」：可用性优先，不因缓存抖动导致全站掉线 |
 
+  > 改造前签发的老 token 没有 `jti`，无法精准失效，重新登录一次即可获得带 jti 的新 token。
+  
+  ### 6.6 定时任务
+  
 - `StockPreheatTask`：启动后预热 / 校准 Redis 秒杀库存
 - `OrderTimeoutTask`：扫描超时未支付订单并关闭（归还座位与库存）
 - `TrainScheduleTask`：**按日期生成班次**（车次模板 → 每日实际班次），启动 10 秒后 + 每小时执行。
@@ -619,7 +690,7 @@ sequenceDiagram
 | 预售期 | `ticket.presale-days=14` | 秒杀校验 | 发车日期超过「今天+14 天」返回 `TICKET_NOT_ON_SALE` |
 | 开车前停售 | `ticket.stop-sell-minutes=20` | 秒杀校验 | 距发车不足 20 分钟返回 `TICKET_STOP_SELL` |
 | 禁止购买已发车 | — | 秒杀校验 | 发车时刻已过返回 `TRAIN_DEPARTED`；同时释放已占的限购标记，避免用户改期重试被误判为重复抢票 |
-| 每人每天每车次限购 1 张 | — | `PurchaseLimitService` | `t_order` 按 `(train_id, user_id)` 统计有效订单（待支付/已支付），已有则 `3006`，不分席别 |
+| 每车次最多购买 9 张 | — | `PurchaseLimitService` | `t_order` 按 `(train_id, user_id)` 统计有效订单（待支付/已支付），已购 + 本次 > 9 则 `3006`，不分席别、可多乘客 |
 | 行程运行时间内不可再买 | — | `PurchaseLimitService` | 已购有效订单区间 `[发车, 到达]` 与目标区间重叠则 `3007`，需等下车（到达）后才能再买 |
 | 购票资格预检 | `GET /api/trains/{trainId}/buy-block` | `TrainServiceImpl.buyBlockReason` | 前端进详情页即提示原因并禁用抢票按钮，避免无意义请求 |
 
@@ -629,7 +700,42 @@ sequenceDiagram
 
 **可查询 vs 可购买**：查询范围 `ticket.query-days=30` 天（前端日期选择器同步限制），购买范围 `ticket.presale-days=14` 天。超出预售期的班次在列表里照常展示，但 `sellable=false`、`sellTip="预售期尚未开始"`。
 
-### 6.8 日志（Logback）
+### 6.8 区间票（同座位分段复用）与售卖时间窗
+
+**为什么要分段**：原模型是「一个座位从始发独占到终到」，中途上下车的区间无法复用座位，运力白白浪费。
+改造后按 **相邻站单段** 管理库存，同一个座位的不同区间可以卖给不同乘客（如 A→B 与 B→C 各卖一张，坐的是同一个座位）。
+
+| 概念 | 说明 |
+| --- | --- |
+| 段（segment） | 相邻两站之间为一段，N 个经停站 = N−1 段；库存存于 `t_train_segment_stock(train_id, seat_type, seg_index)` |
+| 区间占用 | `t_seat_segment(seat_id, from_order, to_order)`：座位只在被占用的区间内不可售 |
+| 区间余票 | 某 OD 区间余票 = 该区间覆盖的**所有单段余票的最小值**（木桶效应，任一段没票就买不了） |
+| 区间座位图 | 按乘车区间展示，只有「本区间被占」的座位置灰；该座位其它区间被占不影响本次购买 |
+| 秒杀扣减 | Redis **多段 Lua 原子扣减**：覆盖的每一段都够票才成交，一段不足则整批失败且不部分扣减 |
+| 退票 / 取消 | 该区间覆盖的每一段都归还；座位在最后一个区间被释放后才置回可售 |
+| 降级 | 未建表 / 车次无经停站时自动退化为「全程票」，与改造前行为完全一致（无需改代码开关） |
+
+启用步骤：
+
+```bash
+mysql -uroot -p qiangpiao < scripts/sql/segment_ticket.sql
+```
+
+脚本内容：`t_train_segment_stock` / `t_seat_segment` 两张表 + `t_order` 加 `from_stop_order` / `to_stop_order`
++ `t_train` 加 `sale_start_time` / `sale_end_time` + 为缺经停站的车次补齐首 / 尾两站。
+
+然后后台 → 车次管理 → 该车次「**区间库存**」初始化（生成 N−1 段并预热到 Redis）。
+未初始化的车次按全程票售卖，不受影响。
+
+**接口侧用法**：`GET /api/trains/{trainId}?from=北京南&to=德州东` —— 余票与座位图都按该区间计算；
+下单时订单会快照实际上下车站序与站名，不再是始发 / 终到。
+
+**售卖时间窗**：`t_train.sale_start_time` / `sale_end_time`，后台车次行「售卖窗口」设置（两栏留空 = 不限时）。
+窗口外禁止抢票：未开始 `4018`，已结束 `4019`；列表与详情会给出不可购提示。
+
+> **区间票暂不支持改签**（跨多段的改签会牵动多段库存与差价），提示用户「先退票后重新购票」（`4017`）。
+
+### 6.9 日志（Logback）
 
 配置文件：`qiangpiao-backend/src/main/resources/logback.xml`（可通过 `-Dlogback.configurationFile=...` 覆盖）。
 
@@ -645,6 +751,10 @@ sequenceDiagram
 
 - **异步**：所有文件输出经 `AsyncAppender`（队列 4096，`discardingThreshold=0` 不丢 WARN/ERROR），业务线程只写队列；`DelayingShutdownHook` 保证退出前刷盘
 - **不重复**：慢 SQL / Druid 慢日志 `additivity=false`；同一个 appender 不会被多个 logger 重复引用
+- **全链路 traceId**：`TraceIdInterceptor` 在请求入口生成 ID 写入 MDC，logback PATTERN 输出 `[%X{traceId}] [%X{orderNo}] [%X{userId}]`；
+  登录用户在 `JwtAuthenticationFilter` 写入 `userId`，下单后 `TraceContext.putOrder()` 写入订单号 —— 一次请求的日志可直接按 traceId 全量捞出
+- **异步线程不丢 traceId**：`AsyncConfig` 的两个线程池都挂了 `MdcTaskDecorator`，秒杀异步落库日志与发起请求同 traceId（否则请求线程与 `seckill-N` 线程对不上账）
+- **慢请求**：请求结束日志带 `cost=`，超过 1s 自动升级为 WARN，直接进 `warn-*.log`
 - **根 logger**：`DEBUG`（业务包 `com.qiangpiao` 为 DEBUG，Spring / MyBatis / Druid / Lettuce / logback 自身限制为 WARN，避免 DEBUG 风暴）
 - **慢 SQL 拦截**：`SlowSqlInterceptor` 挂在 `SqlSessionFactory` 的 plugins 上，记录耗时并把 `?` 替换为真实参数，格式化失败也不影响业务
 - **路径外部化**：`-DQP_LOG_HOME=...`、`-DQP_SQL_LOG_HOME=...`（用 `QP_` 前缀，避免被机器上已存在的 `LOG_HOME` 环境变量覆盖）；`-DMAX_HISTORY`、`-DMAX_FILE_SIZE` 同样可覆盖
@@ -662,13 +772,16 @@ sequenceDiagram
 | POST | `/api/auth/login` | 登录，返回 JWT | 免登录 |
 | POST | `/api/auth/register` | 注册，默认 ROLE_USER | 免登录 |
 | GET | `/api/auth/info` | 当前登录用户 | 需登录 |
+| POST | `/api/auth/logout` | 登出（token 进 Redis 黑名单，立即失效） | 需登录（token 无效也无副作用） |
 
 ### 车次 `/api/trains`
 
 | 方法 | 路径 | 说明 | 鉴权 |
 | --- | --- | --- | --- |
-| GET | `/api/trains` | 分页查询（三级缓存） | 免登录 |
-| GET | `/api/trains/{trainId}` | 车次详情（含座位图） | 免登录 |
+| GET | `/api/trains` | 分页查询（三级缓存，支持中途站 OD 查询） | 免登录 |
+| GET | `/api/trains/{trainId}` | 车次详情（含座位图）；**带 `from` / `to` 时余票与座位图按该乘车区间计算** | 免登录 |
+| GET | `/api/trains/{trainId}/stops` | 车次时刻表（经停站与到发时刻） | 免登录 |
+| GET | `/api/trains/{trainId}/buy-block` | 购票资格预检（限购 / 行程冲突原因） | 免登录 |
 
 ### 车站 `/api/stations`
 
@@ -687,8 +800,11 @@ sequenceDiagram
 
 | 方法 | 路径 | 说明 | 鉴权 |
 | --- | --- | --- | --- |
-| POST | `/api/seckill/do` | 抢票（异步下单，返回排队中） | 需登录 |
-| GET | `/api/seckill/result` | 轮询抢票结果 | 需登录 |
+| POST | `/api/seckill/do` | 抢票（异步下单，返回排队中）；可选 `fromStation` / `toStation` 买区间票 | 需登录 |
+| GET | `/api/seckill/stream` | **SSE 订阅抢票结果**（`batchNo` + `token` 走 query，毫秒级推送） | 需登录 |
+| GET | `/api/seckill/result` | 轮询抢票结果（SSE 不可用时的兜底） | 需登录 |
+| GET | `/api/seckill/batch/result` | 批量抢票结果（一次买多张，逐张给结果） | 需登录 |
+| GET | `/api/seckill/flows` | 我的抢票流水（受理时间 / 结果 / 耗时 / 失败原因） | 需登录 |
 | GET | `/api/seckill/stock` | 实时余票（未预热返回 -1） | 需登录 |
 | POST | `/api/seckill/preheat/{trainId}` | 预热指定车次库存 | ADMIN |
 | POST | `/api/seckill/preheat` | 全量预热库存 | ADMIN |
@@ -722,10 +838,10 @@ sequenceDiagram
 | --- | --- |
 | 车站 | `GET/POST /admin/stations`、`PUT /admin/stations/{id}/status`（停用/启用） |
 | 线路 | `GET/POST /admin/lines`、`DELETE /admin/lines/{id}`、`GET/POST /admin/lines/{lineId}/stations`（途经站与顺序） |
-| 车次 | `GET /admin/trains`、`PUT /admin/trains/{id}/status`（停开某天班次）、`GET/POST /admin/trains/{id}/stops`（时刻表）、`GET/POST /admin/trains/{id}/carriages`（车厢）、`POST /admin/trains/{id}/schedule?date=`（按日期生成当日班次） |
+| 车次 | `GET /admin/trains`、`PUT /admin/trains/{id}/status`（停开某天班次）、`GET/POST /admin/trains/{id}/stops`（时刻表）、`GET/POST /admin/trains/{id}/carriages`（车厢）、`POST /admin/trains/{id}/schedule?date=`（按日期生成当日班次）、`POST /admin/trains/{id}/sale-window`（售卖时间窗）、`POST /admin/trains/{id}/segment/init`（初始化区间库存，生成 N−1 段） |
 | 票价 | `PUT /admin/stocks/{id}/price`、`PUT /admin/stocks/{id}/total` |
 | 订单 | `GET /admin/orders`（订单号/手机号/状态/日期筛选）、`GET /admin/orders/{orderNo}`、`GET /admin/orders/{orderNo}/logs`、`GET /admin/orders/{orderNo}/changes`、`POST /admin/orders/{orderNo}/refund`（人工退票） |
-| 用户 | `GET /admin/users`、`PUT /admin/users/{id}/status`（封禁/解封） |
+| 用户 | `GET /admin/users`、`PUT /admin/users/{id}/status`（封禁/解封，封禁会同步踢下线）、`POST /admin/users/{id}/kick`（强制下线，拉黑该用户所有 token） |
 | 公告 | `GET/POST /admin/announcements`、`DELETE /admin/announcements/{id}`；前台 `GET /api/announcements` 免登录 |
 | 监控 | `GET /admin/monitor/stock`（余票）、`GET /admin/monitor/locked-seats`（锁票） |
 | 报表 | `GET /admin/stats`、`/daily-sales`、`/train-sales`、`/user-growth`、`GET /admin/stats/export?type=`（导出 CSV，Excel 可直接打开） |
@@ -763,17 +879,30 @@ sequenceDiagram
 
 ## 八、数据库表
 
-| 表 | 说明 |
-| --- | --- |
-| `t_user` | 用户：账号、BCrypt 密码、真实姓名、手机号、身份证、角色、状态 |
-| `t_station` | 车站：站名、城市、拼音简码 |
-| `t_train` | 车次：车次号、车型、起终点、发车日期/时间、到达、历时、在售状态 |
-| `t_train_stock` | 车次席别库存：总座位、剩余可售、票价、`version` 乐观锁 |
-| `t_seat` | 座位：车厢号、座位号、状态（0 可售 / 1 已售 / 2 锁定）、占用订单号、乐观锁 |
-| `t_order` | 订单：订单号、用户、车次、座位、乘客、票价、状态、支付/取消/超时时间 |
-| `t_seckill_record` | 秒杀记录：唯一索引 `(train_id, seat_type, user_id)`，保证一人一单 |
-| `t_wallet` | 钱包：用户余额、累计充值、累计消费、`version` 乐观锁，唯一索引 `(user_id)` |
-| `t_wallet_flow` | 零钱流水：流水号、业务单号、类型（1 充值 / 2 消费 / 3 退款）、摘要、明细、变动金额、变动后余额 |
+| #    | 表名                    | 中文名         | 当前行数  | 分类     | 一句话说明                                                   |
+| ---- | ----------------------- | -------------- | --------- | -------- | ------------------------------------------------------------ |
+| 1    | `t_station`             | 车站表         | 371       | 基础数据 | 全国市级车站，支持拼音简码检索                               |
+| 2    | `t_line`                | 线路表         | 15        | 基础数据 | 高铁线路（京沪、京广等），起止站                             |
+| 3    | `t_line_station`        | 线路途经站表   | 137       | 基础数据 | 线路与车站的中间关系，带停靠顺序                             |
+| 4    | `t_announcement`        | 公告表         | 0         | 基础数据 | 停运 / 节假日 / 其他公告                                     |
+| 5    | `t_train`               | 车次表         | 2,700     | 车次运力 | 90 个车次号 × 30 天，按天滚动生成                            |
+| 6    | `t_train_stop`          | 车次时刻表     | 2,466     | 车次运力 | 车次途经站的到发时刻、停靠时长                               |
+| 7    | `t_train_stock`         | 车次席别库存表 | 8,101     | 车次运力 | 每车次每席别的总座 / 余票 / 票价（秒杀扣减对象）             |
+| 8    | `t_carriage`            | 车次车厢表     | 2,160     | 车次运力 | 车次编组：车厢号 + 席别 + 座位数                             |
+| 9    | `t_seat`                | 座位表         | 2,151,634 | 车次运力 | **最大表**：每班次 800 个座位明细，选座/锁座/释放都在这      |
+| 10   | `t_order`               | 订单表         | 0         | 交易     | 订单主体，自带车次快照与退票手续费字段                       |
+| 11   | `t_order_log`           | 订单流转日志表 | 0         | 交易     | 订单时间轴（下单/支付/退票/改签/超时），带 traceId           |
+| 12   | `t_order_change`        | 改签记录表     | 0         | 交易     | 改签历史：原/新车次、座位、差额、手续费                      |
+| 13   | `t_payment`             | 支付流水表     | 4         | 交易     | 两阶段支付：发起支付建单 → 渠道异步回调                      |
+| 14   | `t_seckill_record`      | 秒杀成功记录表 | 0         | 交易     | 抢票成功凭证，唯一键含乘车人证件号（支持一次买多张）         |
+| 15   | `t_user`                | 用户表         | 5         | 账户     | 账号密码（BCrypt）、角色、状态                               |
+| 16   | `t_wallet`              | 钱包表         | 6         | 账户     | 余额 + 累计充值/消费 + 乐观锁                                |
+| 17   | `t_wallet_flow`         | 零钱流水表     | 17        | 账户     | 每笔余额变动留痕，含退款幂等键                               |
+| 18   | `t_seq`                 | 号段表         | 20        | 其它     | 号段槽位（20 个），当前代码未引用，预留                      |
+| 19   | `t_passenger`           | 常用乘车人表   | 0         | 账户     | 每用户最多 3 位，身份证加密存储，下单时可一键选择            |
+| 20   | `t_seckill_flow`        | 抢票流水表     | 0         | 交易     | 一次抢票请求从「受理」到「成功 / 失败」的留痕（排队号 + 耗时 + 失败原因） |
+| 21   | `t_seat_segment`        | 座位区间占用表 | 0         | 车次运力 | **区间票核心**：同一座位按 `[上车站, 下车站)` 分段卖给不同乘客 |
+| 22   | `t_train_segment_stock` | 区间库存表     | 0         | 车次运力 | 按「相邻站单段」计数，OD 区间余票 = 覆盖各段余票的最小值     |
 
 ---
 
@@ -788,6 +917,8 @@ sequenceDiagram
 | 1001 | 用户不存在 | 4001 | 订单不存在 |
 | 1004 | 用户名或密码错误 | 4003 | 订单已超时 |
 | 2002 | 该车次暂不可售 | 500 | 系统繁忙 |
+| 4017 | 区间票暂不支持改签，请先退票重买 | 4018 | 该车次尚未开始售票 |
+| 4019 | 该车次售票已结束 | 3006 | 每车次最多购买 9 张 |
 | 5001 | 钱包不存在，请稍后重试 | 5002 | 余额不足，请到钱包充值 |
 | 5003 | 金额不合法 | 5004 | 单笔充值超过 50000 元 |
 | 5005 | 钱包扣款失败，请稍后重试 | | |
@@ -826,3 +957,22 @@ Caused by: java.sql.SQLException: Access denied for user 'root'@'localhost'
 **6. 端口 8081 被占用**
 
 改 `conf/server.xml` 的 `Connector port`，或 `netstat -ano | findstr 8081` 找到 PID 后结束进程；改端口后同步修改前端 `BACKEND_ORIGIN`。
+
+**7. 区间票没生效：余票、座位图和以前一样**
+
+区间票依赖两张表与经停站数据。依次确认：
+
+1. 是否执行过 `scripts/sql/segment_ticket.sql`（建 `t_train_segment_stock` / `t_seat_segment` + 加列 + 补齐经停站）
+2. 后台 → 车次管理 → 该车次是否点过「**区间库存**」初始化（应提示「已初始化 N 个区间库存段」）
+3. 该车次是否有经停站（`GET /api/trains/{id}/stops`）；只有始发 / 终到两站时区间=全程，看不出差别
+
+未满足以上任一条都会**自动退化为全程票**，功能不受影响，只是没有分段复用。
+
+**8. 登出后旧 token 仍能调通接口**
+
+token 黑名单依赖 JWT 里的 `jti`。改造前签发的老 token 没有该字段，无法精准失效，只能等它自然过期；
+重新登录一次拿到的新 token 即可正常登出 / 被强制下线。
+
+**9.idea老是闪退**
+
+idea所占用内存过多  idea本身内存 tomcat启动  agent内存  这些叠加就容易导致OOM问题

@@ -2,6 +2,10 @@
   <div class="page-container">
     <div class="card-panel">
       <el-form :inline="true" :model="query" @submit.prevent>
+        <el-form-item label="车次号">
+          <el-input v-model="query.trainNo" placeholder="如 G180" maxlength="10" clearable
+                    style="width: 140px" @keyup.enter="search(false)"/>
+        </el-form-item>
         <el-form-item label="出发站">
           <!-- 站点 3000+：虚拟滚动选择器；输入时走后端搜索（城市 / 拼音简码 / 站名） -->
           <el-select-v2 v-model="query.fromStation" :options="stationOptions" filterable remote clearable
@@ -25,7 +29,8 @@
         </el-form-item>
       </el-form>
       <div class="muted">
-        提示：仅展示未发车车次；可查询今天起 30 天内，预售期 14 天，开车前 20 分钟停止售票。
+        提示：填<b>车次号</b>（如 G180）按车次查，此时忽略出发 / 到达站；留空出发日期可看该车次全部未来班次。
+        仅展示未发车车次；可查询今天起 30 天内，预售期 14 天，开车前 20 分钟停止售票。
         <el-tag v-if="fromCache" size="small" type="info" style="margin-left: 8px">来自前端缓存</el-tag>
       </div>
     </div>
@@ -72,7 +77,7 @@
           </template>
         </el-table-column>
         <template #empty>
-          <el-empty description="当日没有符合条件的未发车车次">
+          <el-empty :description="emptyText">
             <el-button type="primary" size="small" @click="pickTomorrow">查看明天的车次</el-button>
           </el-empty>
         </template>
@@ -214,14 +219,34 @@ const list = ref([])
 const total = ref(0)
 const fromCache = ref(false)
 const errorMsg = ref('')
+/** 空态文案：按车次号查和按站点查提示不同 */
+const emptyText = computed(() =>
+  normalizedQuery().trainNo ? '没有找到该未发车车次，换个车次号试试' : '当日没有符合条件的未发车车次'
+)
 
 const query = ref({
+  trainNo: '',
   fromStation: '',
   toStation: '',
   departDate: dayjs.today(),
   pageNum: 1,
   pageSize: 10
 })
+
+/**
+ * 规范化查询参数：车次号统一大写，且填了车次号就清掉出发 / 到达站
+ * （后端也是「车次号优先」，保持一致才能命中同一份缓存、结果一致）。
+ */
+function normalizedQuery() {
+  const q = { ...query.value }
+  const no = (q.trainNo || '').trim().toUpperCase()
+  q.trainNo = no
+  if (no) {
+    q.fromStation = ''
+    q.toStation = ''
+  }
+  return q
+}
 
 onMounted(async () => {
   await stationStore.loadStations()
@@ -233,13 +258,15 @@ onMounted(async () => {
 })
 
 function cacheKey() {
-  return `trains:${query.value.fromStation}:${query.value.toStation}:${query.value.departDate}:${query.value.pageNum}:${query.value.pageSize}`
+  const q = normalizedQuery()
+  return `trains:${q.trainNo}:${q.fromStation}:${q.toStation}:${q.departDate}:${q.pageNum}:${q.pageSize}`
 }
 
 async function search(force) {
   loading.value = true
   errorMsg.value = ''
   try {
+    const q = normalizedQuery()
     if (!force) {
       const cached = localCache.get(cacheKey())
       if (cached) {
@@ -250,7 +277,7 @@ async function search(force) {
       }
     }
     fromCache.value = false
-    const data = await queryTrains(query.value)
+    const data = await queryTrains(q)
     list.value = data.list || []
     total.value = data.total || 0
     // 前端缓存 30 秒，降低后端 QPS
@@ -291,10 +318,11 @@ function pickTomorrow() {
 
 function goDetail(trainId) {
   // 带上查询条件：详情据此按「上车站 → 下车站」算区间余票与可选座位
+  const q = normalizedQuery()
   const params = new URLSearchParams()
-  if (query.value.fromStation) params.set('from', query.value.fromStation)
-  if (query.value.toStation) params.set('to', query.value.toStation)
-  if (query.value.departDate) params.set('date', query.value.departDate)
+  if (q.fromStation) params.set('from', q.fromStation)
+  if (q.toStation) params.set('to', q.toStation)
+  if (q.departDate) params.set('date', q.departDate)
   const qs = params.toString()
   router.push(qs ? `/trains/${trainId}?${qs}` : `/trains/${trainId}`)
 }

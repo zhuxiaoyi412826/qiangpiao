@@ -35,7 +35,8 @@ public final class RedisKeys {
     }
 
     /**
-     * 限购标记 key：按「车次 + 用户」维度（不分席别），实现每人每天每车次限购 1 张。
+     * 限购额度 key：按「车次 + 用户」维度（不分席别），值是已占额度计数器，上限 9 张
+     * （PurchaseLimitService.MAX_TICKETS_PER_TRAIN），减到 0 才删 key。
      */
     public static String seckillUser(Long trainId, Long userId) {
         return Constants.SECKILL_USER_KEY + trainId + ":" + userId;

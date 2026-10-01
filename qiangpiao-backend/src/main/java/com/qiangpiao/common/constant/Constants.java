@@ -124,6 +124,10 @@ public final class Constants {
     public static final int WALLET_FLOW_REFUND = 3;
     /** 钱包流水类型：平台售票收入（用户购票时进入平台账户） */
     public static final int WALLET_FLOW_PLATFORM_INCOME = 4;
+    /** 新用户注册礼包：幂等键前缀（t_wallet_flow.idempotent_key 唯一索引保证只送一次） */
+    public static final String WALLET_GIFT_IDEMPOTENT_PREFIX = "REGISTER_GIFT:";
+    /** 新用户注册礼包：业务单号前缀 */
+    public static final String WALLET_GIFT_BIZ_NO_PREFIX = "INIT";
 
     /**
      * 支付单状态文案。

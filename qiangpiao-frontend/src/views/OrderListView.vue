@@ -41,7 +41,15 @@
             <el-tag :type="statusTag(row.status)" size="small">{{ row.statusText }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="支付截止" prop="expireTime" min-width="180"/>
+        <el-table-column label="支付截止" prop="expireTime" min-width="150"/>
+        <el-table-column label="支付剩余" width="110">
+          <template #default="{ row }">
+            <span v-if="row.status === 0" :class="{ 'left-danger': payLeft(row) === '已超时' }">
+              {{ payLeft(row) }}
+            </span>
+            <span v-else>--</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button v-if="row.status === 0" type="primary" size="small" @click="pay(row)">支付</el-button>
@@ -62,7 +70,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { queryOrders, payOrder, cancelOrder } from '@/api/order'
@@ -79,7 +87,19 @@ const pageSize = ref(10)
 const status = ref(null)
 const errorMsg = ref('')
 
-onMounted(loadOrders)
+/** 每秒推进一次，驱动「支付剩余」倒计时（订单支付时限 5 分钟） */
+const now = ref(Date.now())
+let tickTimer = null
+
+onMounted(() => {
+  loadOrders()
+  tickTimer = setInterval(() => {
+    now.value = Date.now()
+  }, 1000)
+})
+onUnmounted(() => {
+  if (tickTimer) clearInterval(tickTimer)
+})
 
 async function loadOrders() {
   loading.value = true
@@ -130,6 +150,30 @@ function fmtTime(v) {
   return toText(v) === '--' ? '--' : toText(v).slice(11, 16)
 }
 
+/** 待支付订单的剩余支付时间：mm:ss，超时显示「已超时」（后台每 30 秒自动关单） */
+function payLeft(row) {
+  if (row.status !== 0) return '--'
+  const target = toTimestamp(row.expireTime)
+  if (!target) return '--'
+  const ms = target - now.value
+  if (ms <= 0) return '已超时'
+  const total = Math.floor(ms / 1000)
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
+
+/** LocalDateTime 可能是 ISO 字符串，也可能是 [y,m,d,h,mi,s] 数组 */
+function toTimestamp(v) {
+  if (!v) return 0
+  if (typeof v === 'string') {
+    return new Date(v.replace(' ', 'T')).getTime()
+  }
+  if (Array.isArray(v)) {
+    const [y, m, d, h = 0, mi = 0, s = 0] = v
+    return new Date(y, (m || 1) - 1, d || 1, h, mi, s).getTime()
+  }
+  return 0
+}
+
 async function pay(row) {
   try {
     // 第一阶段：发起支付，扣款在渠道回调后完成，跳详情页等待结果
@@ -137,6 +181,14 @@ async function pay(row) {
     ElMessage.success('已发起支付，等待渠道回调')
     router.push(`/orders/${row.orderNo}`)
   } catch (e) {
+    const msg = e?.message || ''
+    // 渠道回调先到、订单已支付：列表是旧数据，刷新后跳详情页看结果，不再弹"订单状态不正确"
+    if (msg.indexOf('已支付') >= 0) {
+      ElMessage.info('该订单已支付成功')
+      loadOrders()
+      router.push(`/orders/${row.orderNo}`)
+      return
+    }
     // 余额不足时引导去钱包充值
     if (e.message && e.message.indexOf('余额不足') >= 0) {
       ElMessageBox.confirm(e.message + '，是否立即前往钱包充值？', '提示', {
@@ -161,5 +213,9 @@ async function cancel(row) {
 .pager {
   margin-top: 16px;
   justify-content: flex-end;
+}
+.left-danger {
+  color: #f56c6c;
+  font-weight: 600;
 }
 </style>

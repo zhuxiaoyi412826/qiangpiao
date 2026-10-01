@@ -103,6 +103,39 @@
         )
     </select>
 
+    <!--
+      按车次号查询：train_no 前缀匹配（输 G180 可命中 G180 / G1801），
+      走 uk_train_date(train_no, depart_date) 前缀索引；departDate 为空时返回该车次全部未发车班次。
+    -->
+    <select id="selectByTrainNo" resultType="com.qiangpiao.dataobject.TrainDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_train
+        WHERE status = 1
+        AND train_no LIKE CONCAT(#{trainNo}, '%')
+        <if test="departDate != null">
+            AND depart_date = #{departDate}
+        </if>
+        AND (
+        <include refid="Not_Departed_Condition"/>
+        )
+        ORDER BY depart_date, depart_time
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countByTrainNo" resultType="long">
+        SELECT COUNT(1)
+        FROM t_train
+        WHERE status = 1
+        AND train_no LIKE CONCAT(#{trainNo}, '%')
+        <if test="departDate != null">
+            AND depart_date = #{departDate}
+        </if>
+        AND (
+        <include refid="Not_Departed_Condition"/>
+        )
+    </select>
+
     <select id="selectAll" resultType="com.qiangpiao.dataobject.TrainDO">
         SELECT
         <include refid="Base_Column_List"/>

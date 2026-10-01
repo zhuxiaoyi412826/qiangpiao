@@ -26,8 +26,11 @@ public class TrainQueryDTO implements Serializable {
     private String toStation;
 
     @DateTimeFormat(pattern = "yyyy-MM-dd")
-    @ApiModelProperty(value = "出发日期 yyyy-MM-dd")
+    @ApiModelProperty(value = "出发日期 yyyy-MM-dd；按车次号查询时可留空，返回该车次全部未来班次")
     private LocalDate departDate;
+
+    @ApiModelProperty(value = "车次号（如 G180），填写后优先按车次号查询，忽略出发 / 到达站", example = "G180")
+    private String trainNo;
 
     @Min(value = 1, message = "页码不能小于 1")
     @ApiModelProperty(value = "页码", example = "1")

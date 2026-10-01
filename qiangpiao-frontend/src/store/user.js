@@ -36,6 +36,10 @@ export const useUserStore = defineStore('user', {
             }
             localCache.set('userInfo', this.userInfo, vo.expiresIn || 7200)
         },
+        /**
+         * 拉取用户信息（登录态心跳也走这里）。
+         * 401 = 已登出 / 被管理端强制下线 / 账号被封：只清本地，别再调 logout 接口（它自己也会 401）。
+         */
         async loadUserInfo() {
             if (!this.token) {
                 return null
@@ -45,9 +49,20 @@ export const useUserStore = defineStore('user', {
                 localCache.set('userInfo', this.userInfo, 7200)
                 return this.userInfo
             } catch (e) {
+                if (e && (e.code === 401 || e.status === 401)) {
+                    this.clearAuth()
+                    return null
+                }
                 this.logout()
                 return null
             }
+        },
+        /** 只清本地登录态：token 失效 / 被踢下线时用，不再请求后端 */
+        clearAuth() {
+            this.token = ''
+            this.userInfo = null
+            localCache.remove('token')
+            localCache.remove('userInfo')
         },
         /** 登出：先通知后端把 token 拉黑（失败也要清本地，不能卡住用户退出） */
         async logout() {
@@ -58,10 +73,7 @@ export const useUserStore = defineStore('user', {
             } catch (e) {
                 console.warn('[user] 登出接口调用失败，已清理本地登录态', e.message)
             }
-            this.token = ''
-            this.userInfo = null
-            localCache.remove('token')
-            localCache.remove('userInfo')
+            this.clearAuth()
         }
     }
 })

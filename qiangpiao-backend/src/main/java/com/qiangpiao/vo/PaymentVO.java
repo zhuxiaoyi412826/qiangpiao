@@ -46,4 +46,6 @@ public class PaymentVO {
     private LocalDateTime createTime;
     @ApiModelProperty("失败原因")
     private String failReason;
+    @ApiModelProperty("模拟渠道自动回调成功的倒计时（秒）；0 = 不自动回调，必须由页面手动选择结果")
+    private Integer autoCallbackSeconds;
 }

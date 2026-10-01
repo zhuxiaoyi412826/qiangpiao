@@ -331,8 +331,18 @@
 
         <!-- 票务监控 -->
         <el-tab-pane label="票务监控" name="monitor">
-          <el-divider content-position="left">余票监控</el-divider>
-          <el-table :data="stocks" border size="small">
+          <el-form :inline="true" size="small" @submit.prevent>
+            <el-form-item label="车次号">
+              <el-input v-model="monitorQuery.trainNo" clearable placeholder="如 G1001" style="width: 160px"
+                        @keyup.enter="reloadMonitor" @clear="reloadMonitor"/>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" size="small" @click="reloadMonitor">查询</el-button>
+              <el-button size="small" @click="loadMonitor">刷新</el-button>
+            </el-form-item>
+          </el-form>
+          <el-divider content-position="left">余票监控（共 {{ monitorTotal }} 条）</el-divider>
+          <el-table :data="monitorStocks" border size="small" v-loading="monitorLoading">
             <el-table-column prop="trainNo" label="车次" width="100"/>
             <el-table-column prop="departDate" label="日期" width="120"/>
             <el-table-column label="席别" width="100">
@@ -346,7 +356,13 @@
               </template>
             </el-table-column>
           </el-table>
-          <el-divider content-position="left">锁票（下单后临时锁定，超时自动释放）</el-divider>
+          <el-pagination class="pager" background layout="total, prev, pager, next"
+                         :current-page="monitorQuery.pageNum" :page-size="monitorQuery.pageSize"
+                         :total="monitorTotal"
+                         @current-change="p => { monitorQuery.pageNum = p; loadMonitor() }"/>
+          <el-divider content-position="left">
+            锁票（下单后临时锁定，超时自动释放，共 {{ lockedSeats.length }} 条）
+          </el-divider>
           <el-table :data="lockedSeats" border size="small">
             <el-table-column prop="trainId" label="车次ID" width="90"/>
             <el-table-column prop="carriageNo" label="车厢" width="80"/>
@@ -383,10 +399,51 @@
             </el-table-column>
           </el-table>
 
-          <el-divider content-position="left">风控事件（同一 IP 多账号 / 极短耗时请求）</el-divider>
+          <el-divider content-position="left">
+            风控事件（同一 IP 多账号 / 极短耗时请求）
+            <el-button size="small" style="margin-left: 8px" @click="loadRisk">刷新</el-button>
+          </el-divider>
           <el-table :data="riskEvents" border size="small" max-height="360">
             <el-table-column prop="text" label="事件" min-width="520"/>
           </el-table>
+
+          <el-divider content-position="left">秒杀 / 抢票流水</el-divider>
+          <el-form :inline="true" size="small" @submit.prevent>
+            <el-form-item label="用户ID">
+              <el-input v-model="flowQuery.userId" clearable style="width: 120px" placeholder="如 1"/>
+            </el-form-item>
+            <el-form-item label="车次ID">
+              <el-input v-model="flowQuery.trainId" clearable style="width: 120px"/>
+            </el-form-item>
+            <el-form-item label="状态">
+              <el-select v-model="flowQuery.status" clearable style="width: 120px" placeholder="全部">
+                <el-option label="排队中" :value="0"/>
+                <el-option label="成功" :value="1"/>
+                <el-option label="失败" :value="2"/>
+              </el-select>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" size="small" @click="reloadFlows">查询</el-button>
+              <el-button size="small" @click="loadFlows">刷新</el-button>
+            </el-form-item>
+          </el-form>
+          <el-table :data="flows" border size="small" max-height="360">
+            <el-table-column prop="orderNo" label="订单号" min-width="170"/>
+            <el-table-column prop="userId" label="用户" width="80"/>
+            <el-table-column prop="trainId" label="车次ID" width="90"/>
+            <el-table-column label="结果" width="100">
+              <template #default="{ row }">
+                <el-tag size="small" :type="flowStatusType(row.status)">{{ row.statusText }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="failReason" label="失败原因" min-width="180"/>
+            <el-table-column prop="queueSeq" label="排队号" width="80"/>
+            <el-table-column prop="costMs" label="耗时(ms)" width="90"/>
+            <el-table-column prop="createTime" label="受理时间" width="170"/>
+          </el-table>
+          <el-pagination class="pager" background layout="total, prev, pager, next"
+                         :current-page="flowQuery.pageNum" :page-size="flowQuery.pageSize" :total="flowTotal"
+                         @current-change="p => { flowQuery.pageNum = p; loadFlows() }"/>
         </el-tab-pane>
       </el-tabs>
     </div>
@@ -717,8 +774,12 @@ const notices = ref([])
 const noticeVisible = ref(false)
 const noticeForm = ref({})
 
-// 监控
+// 监控：余票（独立分页 / 车次筛选）+ 锁票
 const lockedSeats = ref([])
+const monitorStocks = ref([])
+const monitorTotal = ref(0)
+const monitorLoading = ref(false)
+const monitorQuery = ref({ trainNo: '', pageNum: 1, pageSize: 20 })
 
 // 风控（IP 黑名单 + 风控事件）
 const blacklist = ref([])
@@ -734,15 +795,23 @@ const TAB_LOADERS = {
   trains: loadTrains,
   price: loadStocks,
   orders: loadOrders,
+  flows: loadFlows,
   users: loadUsers,
   notice: loadNotices,
-  monitor: loadLocked,
+  monitor: loadMonitor,
   risk: loadRisk
 }
 
 async function ensureTab(name) {
   const loader = TAB_LOADERS[name]
-  if (!loader || loadedTabs.value.has(name)) return
+  if (!loader) return
+  // 监控 / 风控是实时数据（余票、锁票、风控事件随时在变），每次切进来都重新拉，
+  // 否则停在首次加载的快照上，看起来就像"页面是空的"
+  if (name === 'monitor' || name === 'risk') {
+    await loader()
+    return
+  }
+  if (loadedTabs.value.has(name)) return
   loadedTabs.value.add(name)
   await loader()
 }
@@ -761,6 +830,8 @@ async function loadRisk() {
     blacklist.value = Object.keys(map || {}).map(ip => ({ ip, reason: map[ip] }))
     const list = await api.adminRiskEvents(50)
     riskEvents.value = (list || []).map(text => ({ text }))
+    // 秒杀 / 抢票流水同属风控排查入口，一起带出来
+    await loadFlows()
   } catch (e) {
     ElMessage.error(e.message || '风控数据加载失败')
   }
@@ -866,6 +937,29 @@ async function loadNotices() {
 }
 async function loadLocked() {
   try { lockedSeats.value = await api.adminLockedSeats(50) } catch (e) { ElMessage.error(e.message) }
+}
+
+/** 票务监控：余票（分页 + 车次筛选）+ 锁票，一起刷新 */
+async function loadMonitor() {
+  monitorLoading.value = true
+  try {
+    const data = await api.adminStockMonitor({
+      pageNum: monitorQuery.value.pageNum,
+      pageSize: monitorQuery.value.pageSize,
+      trainNo: monitorQuery.value.trainNo
+    })
+    monitorStocks.value = data.list || []
+    monitorTotal.value = data.total || 0
+    lockedSeats.value = await api.adminLockedSeats(50)
+  } catch (e) {
+    ElMessage.error(e.message || '监控数据加载失败')
+  } finally {
+    monitorLoading.value = false
+  }
+}
+function reloadMonitor() {
+  monitorQuery.value.pageNum = 1
+  loadMonitor()
 }
 
 // ============ 车站 ============
@@ -1038,7 +1132,9 @@ async function kickOffline(row) {
   }
   try {
     const n = await api.kickUser(row.id)
-    ElMessage.success(n > 0 ? `已强制下线，失效 ${n} 个登录态` : '该用户当前没有在线登录态')
+    ElMessage.success(n > 0
+      ? `已强制下线，失效 ${n} 个登录态`
+      : '该用户当前没有在线登录态（若其 token 是改造前签发的老 token，需对方重新登录一次才能被踢）')
   } catch (e) {
     ElMessage.error(e.message)
   }

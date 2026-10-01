@@ -29,6 +29,35 @@ export function getLastTraceId () {
     return lastTraceId
 }
 
+/** 错误对象带上业务码 / HTTP 状态，方便调用方（如 store）判断是不是「登录失效」 */
+function buildError (message, code, traceId) {
+    const err = new Error(message)
+    err.code = code
+    err.traceId = traceId || ''
+    return err
+}
+
+/**
+ * 登录失效统一处理：登出 / 被管理端强制下线 / 账号被封都会走到这里。
+ * 注意 Spring Security 的 authenticationEntryPoint 返回的是 HTTP 401 + JSON body，
+ * axios 会把它当「请求错误」，所以 success 分支和 error 分支都要覆盖。
+ */
+let authExpiredFired = false
+function handleAuthExpired (message) {
+    localCache.remove('token')
+    localCache.remove('userInfo')
+    if (authExpiredFired) {
+        return
+    }
+    authExpiredFired = true
+    // 交给 App.vue 清理 Pinia 并跳转：避免在 request 层反向依赖 router / store
+    window.dispatchEvent(new CustomEvent('auth:expired', { detail: message || '登录已失效' }))
+    // 2 秒内同一波并发 401 只处理一次；用户重新登录后恢复
+    setTimeout(() => {
+        authExpiredFired = false
+    }, 2000)
+}
+
 /** 失败提示带上 traceId：用户截图报障时，后端可直接按这个 ID 捞全链路日志 */
 function withTrace (message, traceId) {
     return traceId ? `${message}（traceId：${traceId}）` : message
@@ -59,15 +88,13 @@ service.interceptors.response.use(response => {
         return body.data
     }
     const message = (body && body.message) || '请求失败'
-    ElMessage.error(withTrace(message, traceId))
+    // HTTP 200 但业务码 401（如自定义拦截器返回的未登录）
     if (body && body.code === 401) {
-        localCache.remove('token')
-        localCache.remove('userInfo')
-        setTimeout(() => {
-            window.location.href = '/login'
-        }, 300)
+        handleAuthExpired(message)
+        return Promise.reject(buildError(message, 401, traceId))
     }
-    return Promise.reject(new Error(message))
+    ElMessage.error(withTrace(message, traceId))
+    return Promise.reject(buildError(message, body && body.code, traceId))
 }, error => {
     if (error.response) {
         const { status, data } = error.response
@@ -77,8 +104,13 @@ service.interceptors.response.use(response => {
             lastTraceId = traceId
         }
         const message = (data && data.message) || `请求异常（${status}）`
+        // 被踢下线 / 封号后，受保护接口会被 Spring Security 拦成 HTTP 401
+        if (status === 401 || (data && data.code === 401)) {
+            handleAuthExpired(message)
+            return Promise.reject(buildError(message, 401, traceId))
+        }
         ElMessage.error(withTrace(message, traceId))
-        return Promise.reject(new Error(message))
+        return Promise.reject(buildError(message, (data && data.code) || status, traceId))
     }
     // 幂等请求自动重试后再判定失败
     if (canRetry(error)) {

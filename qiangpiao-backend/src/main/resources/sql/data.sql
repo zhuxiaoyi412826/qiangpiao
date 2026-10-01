@@ -1,6 +1,6 @@
 -- =============================================================
 --  初始化数据：车站 / 车次 / 库存 / 座位 / 测试用户
---  密码统一为 123456（BCrypt 密文）
+--  密码统一为 admin123（BCrypt 密文）
 -- =============================================================
 USE qiangpiao;
 
@@ -17,11 +17,11 @@ INSERT INTO t_station (station_name, city, py_code) VALUES
 ('西安北', '西安', 'XAB'),
 ('长沙南', '长沙', 'CSN') ON DUPLICATE KEY UPDATE city = VALUES(city);
 
--- ---------- 用户（密码 123456） ----------
+-- ---------- 用户（密码 admin123） ----------
 INSERT INTO t_user (username, password, real_name, phone, id_card, role, status) VALUES
-('admin', '$2a$10$So/jYvXr9wSTuKZzOicO4.ums8Dn35ZLUJYXnJa3dnm2K1Dcsg9l.', '系统管理员', '13800000000', '110101199001011010', 'ROLE_ADMIN', 1),
-('zhangsan', '$2a$10$So/jYvXr9wSTuKZzOicO4.ums8Dn35ZLUJYXnJa3dnm2K1Dcsg9l.', '张三', '13800000001', '110101199001011011', 'ROLE_USER', 1),
-('lisi', '$2a$10$So/jYvXr9wSTuKZzOicO4.ums8Dn35ZLUJYXnJa3dnm2K1Dcsg9l.', '李四', '13800000002', '110101199001011012', 'ROLE_USER', 1)
+('admin', '$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE8ByOhJIrdAu2.', '系统管理员', '13800000000', '110101199001011010', 'ROLE_ADMIN', 1),
+('zhangsan', '$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE8ByOhJIrdAu2.', '张三', '13800000001', '110101199001011011', 'ROLE_USER', 1),
+('lisi', '$2a$10$7JB720yubVSZvUI0rEqK/.VqGOZTH.ulu33dHOiBE8ByOhJIrdAu2.', '李四', '13800000002', '110101199001011012', 'ROLE_USER', 1)
 ON DUPLICATE KEY UPDATE real_name = VALUES(real_name), password = VALUES(password);
 
 -- ---------- 车次（日期使用相对当天，便于测试） ----------

@@ -25,11 +25,15 @@
           <el-descriptions-item label="乘客">{{ order.passengerName }}</el-descriptions-item>
           <el-descriptions-item label="票价">¥{{ order.price }}</el-descriptions-item>
           <el-descriptions-item label="支付截止">{{ fmt(order.expireTime) }}</el-descriptions-item>
+          <el-descriptions-item v-if="order.status === 0" label="剩余支付时间">
+            <span :class="{ 'left-danger': payLeftText === '已超时' }">{{ payLeftText }}</span>
+          </el-descriptions-item>
         </el-descriptions>
 
         <div class="op-bar">
-          <el-button v-if="order.status === 0" type="primary" size="small" :loading="paying" @click="doPay">
-            立即支付
+          <el-button v-if="order.status === 0" type="primary" size="small"
+                     :loading="paying" :disabled="payWaiting" @click="doPay">
+            {{ payWaiting ? '支付处理中…' : '立即支付' }}
           </el-button>
           <el-button v-if="order.status === 0" type="danger" size="small" @click="doCancel">取消订单</el-button>
           <el-button v-if="order.status === 1" type="warning" size="small"
@@ -86,10 +90,18 @@
             <el-tag size="small" :type="payTagType(payment.status)">{{ payment.statusText }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="渠道交易号">{{ payment.tradeNo || '回调后生成' }}</el-descriptions-item>
+          <el-descriptions-item label="剩余支付时间">{{ payLeftText }}</el-descriptions-item>
         </el-descriptions>
         <div class="pay-tip">
-          已发起支付，等待渠道回调（模拟渠道约 3 秒后回调）。回调验签 + 幂等通过后才会扣款并入账。
+          <b>请手动选择支付结果</b>：
+          <br>① 点「模拟支付成功」→ 验签 + 幂等通过后扣款、出票，订单变为已支付；
+          <br>② 点「模拟支付失败」→ 支付单失败、<b>订单保留为待支付</b>，可重新发起支付；
+          <br>③ 超过支付时限（{{ payLeftText }}）未支付，订单由系统自动关闭并释放座位。
         </div>
+        <div v-if="autoLeft > 0" class="auto-tip">
+          未在 <b>{{ autoLeft }}</b> 秒内选择，渠道将自动按「支付成功」回调（先点按钮先生效）。
+        </div>
+        <div v-else class="auto-tip">当前为手动模式：渠道不会自动回调，必须选择成功或失败。</div>
       </template>
       <template #footer>
         <el-button size="small" @click="payVisible = false">稍后查看</el-button>
@@ -101,7 +113,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchOrderDetail, payOrder, cancelOrder } from '@/api/order'
@@ -125,9 +137,18 @@ const payVisible = ref(false)
 const payment = ref(null)
 let payTimer = null
 let pollTimes = 0
+/** 已有未终态支付单：渠道回调随时会到，此时禁止重复发起支付 */
+const payWaiting = computed(() => !!payment.value && payment.value.status === 0)
+/** 订单支付时效倒计时（order.pay-timeout-minutes=5），仅待支付订单有意义 */
+const payLeftText = ref('-')
+let leftTimer = null
 
 onMounted(load)
-onBeforeUnmount(stopPolling)
+onBeforeUnmount(() => {
+  stopPolling()
+  stopAutoCountdown()
+  stopLeftTimer()
+})
 
 async function load() {
   loading.value = true
@@ -140,16 +161,85 @@ async function load() {
     errorMsg.value = e.message || '加载订单详情失败'
   } finally {
     loading.value = false
+    startLeftTimer()
   }
 }
 
+/** 后端返回的 LocalDateTime 可能是 ISO 字符串，也可能是 [y,m,d,h,mi,s] 数组 */
+function parseTime(v) {
+  if (!v) return 0
+  if (typeof v === 'string') {
+    return new Date(v.replace(' ', 'T')).getTime()
+  }
+  if (Array.isArray(v)) {
+    const [y, m, d, h = 0, mi = 0, s = 0] = v
+    return new Date(y, (m || 1) - 1, d || 1, h, mi, s).getTime()
+  }
+  return 0
+}
+
+function startLeftTimer() {
+  stopLeftTimer()
+  refreshLeft()
+  // 已支付 / 已关闭的订单不用再走秒级刷新
+  if (order.value && order.value.status === 0) {
+    leftTimer = setInterval(refreshLeft, 1000)
+  }
+}
+
+function stopLeftTimer() {
+  if (leftTimer) {
+    clearInterval(leftTimer)
+    leftTimer = null
+  }
+}
+
+function refreshLeft() {
+  // 只有待支付订单才倒计时
+  if (!order.value || order.value.status !== 0) {
+    payLeftText.value = '-'
+    stopLeftTimer()
+    return
+  }
+  const target = parseTime(order.value.expireTime)
+  if (!target) {
+    payLeftText.value = '-'
+    return
+  }
+  const ms = target - Date.now()
+  if (ms <= 0) {
+    payLeftText.value = '已超时'
+    stopLeftTimer()
+    // 后台关单任务每 30 秒一轮，超时后拉一次看是否已自动关闭
+    load()
+    return
+  }
+  const total = Math.floor(ms / 1000)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  payLeftText.value = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
 async function doPay() {
+  // 发起前先拉一次最新状态：渠道回调（默认 15 秒）可能已经把订单置为「已支付」，
+  // 而页面还停在旧的「待支付」，直接发起就会撞上「订单状态不正确」
+  const fresh = await fetchOrderDetail(orderNo).catch(() => null)
+  if (fresh) {
+    order.value = fresh
+    if (fresh.status !== 0) {
+      ElMessage.info(fresh.status === 1 ? '该订单已支付成功' : '订单状态已变更，已为你刷新')
+      await load()
+      return
+    }
+  }
   paying.value = true
   try {
     // 第一阶段：只发起支付，不扣款
     payment.value = await payOrder(order.value.orderNo)
     payVisible.value = true
     startPolling(payment.value.payNo)
+    // 后端给了自动回调秒数（默认 15 秒）就倒计时提示，0 表示必须手动选择
+    startAutoCountdown(payment.value.autoCallbackSeconds || 0)
   } catch (e) {
     await handlePayError(e)
   } finally {
@@ -167,11 +257,16 @@ function startPolling(payNo) {
       payment.value = p
       if (p.status !== 0) {
         stopPolling()
+        stopAutoCountdown()
+        autoLeft.value = 0
         payVisible.value = false
+        // 支付单已终态：清掉引用，按钮恢复可用（失败时可重新发起）
+        payment.value = null
         if (p.status === 1) {
           ElMessage.success('支付成功')
         } else {
-          ElMessage.warning(p.failReason || '支付未完成，可重新发起支付')
+          // 失败 / 关闭都保留订单：只有真正扣款成功才会变已支付
+          ElMessage.warning((p.failReason || '支付失败') + '：订单已保留，可重新发起支付')
         }
         load()
       } else if (pollTimes >= 40) {
@@ -191,19 +286,74 @@ function stopPolling() {
   }
 }
 
+/**
+ * 模拟渠道自动回调倒计时（秒）：后端返回 autoCallbackSeconds，
+ * 0 表示不会自动回调，必须由页面手动选择成功 / 失败。
+ */
+const autoLeft = ref(0)
+let autoTimer = null
+
+function startAutoCountdown(seconds) {
+  stopAutoCountdown()
+  autoLeft.value = seconds > 0 ? seconds : 0
+  if (autoLeft.value <= 0) return
+  autoTimer = setInterval(() => {
+    autoLeft.value--
+    if (autoLeft.value <= 0) {
+      stopAutoCountdown()
+      ElMessage.info('未在时限内选择，渠道已按默认结果（成功）回调，正在确认…')
+    }
+  }, 1000)
+}
+
+function stopAutoCountdown() {
+  if (autoTimer) {
+    clearInterval(autoTimer)
+    autoTimer = null
+  }
+}
+
 function onPayDialogClose() {
   // 关闭弹窗不停止等待：渠道回调仍会到达，刷新详情即可看到结果
   payment.value = null
 }
 
+/**
+ * 手动选择渠道结果：渠道默认 15 秒后才自动按成功回调，期间手动改判优先
+ * （支付单一终态，后来的自动回调会被幂等去重，不会再把订单改成已支付）。
+ * 成功 -> 验签 + 幂等通过后扣款出票，订单变已支付；
+ * 失败 -> 支付单置为失败，订单保留为待支付，可重新发起支付。
+ */
 async function mockResult(result) {
   if (!payment.value) return
-  await mockPayCallback(payment.value.payNo, result)
-  ElMessage.info(result === 'SUCCESS' ? '已模拟渠道成功回调' : '已模拟渠道失败回调')
+  try {
+    await mockPayCallback(payment.value.payNo, result)
+  } catch (e) {
+    ElMessage.error(e?.message || '模拟回调失败')
+    return
+  }
+  stopPolling()
+  stopAutoCountdown()
+  autoLeft.value = 0
+  payVisible.value = false
+  // 支付单已终态：清掉引用，失败时「立即支付」按钮立刻恢复可用
+  payment.value = null
+  if (result === 'SUCCESS') {
+    ElMessage.success('支付成功：已扣款并出票')
+  } else {
+    ElMessage.warning('支付失败：订单已保留为待支付，可重新发起支付')
+  }
+  await load()
 }
 
 async function handlePayError(e) {
   const msg = e?.message || ''
+  // 渠道回调先到、订单已支付：刷新详情展示最新状态，不当作支付失败
+  if (msg.includes('已支付')) {
+    ElMessage.info('该订单已支付成功')
+    await load()
+    return
+  }
   if (msg.includes('余额不足')) {
     try {
       await ElMessageBox.confirm(msg + '，是否立即前往钱包充值？', '提示', {
@@ -280,6 +430,8 @@ function timelineTag(action) {
 .op-bar { margin: 14px 0 4px; display: flex; gap: 10px; }
 .log-card { padding: 6px 10px; }
 .pay-tip { margin-top: 10px; font-size: 12px; color: #909399; line-height: 1.6; }
+.auto-tip { margin-top: 8px; font-size: 12px; color: #e6a23c; }
+.left-danger { color: #f56c6c; font-weight: 600; }
 .log-title { font-weight: 600; }
 .log-action { margin-left: 8px; }
 .log-meta { font-size: 12px; margin-top: 2px; }

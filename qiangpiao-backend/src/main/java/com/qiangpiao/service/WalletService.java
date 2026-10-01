@@ -13,9 +13,19 @@ import java.math.BigDecimal;
 public interface WalletService {
 
     /**
-     * 查询钱包（不存在则初始化）。
+     * 查询钱包（不存在则初始化，余额为 0）。
      */
     WalletVO getWallet(Long userId);
+
+    /**
+     * 新用户注册礼包：自动开户并赠送初始余额。
+     * 幂等：同一用户只会赠送一次（重复调用返回当前钱包）。
+     *
+     * @param userId      用户ID
+     * @param giftAmount  赠送金额（<= 0 表示只开户不赠送）
+     * @return 赠送后的钱包
+     */
+    WalletVO grantRegisterGift(Long userId, BigDecimal giftAmount);
 
     /**
      * 自定义金额充值（模拟支付渠道回调成功后入账）。

@@ -39,6 +39,18 @@ public interface TrainMapper {
                         @Param("toStation") String toStation,
                         @Param("departDate") LocalDate departDate);
 
+    /**
+     * 按车次号查询（前缀匹配：G180 能查出 G180、G1801 等）：
+     * departDate 为空时返回该车次全部未发车班次，按发车日期升序。
+     */
+    List<TrainDO> selectByTrainNo(@Param("trainNo") String trainNo,
+                                  @Param("departDate") LocalDate departDate,
+                                  @Param("offset") Long offset,
+                                  @Param("limit") Long limit);
+
+    long countByTrainNo(@Param("trainNo") String trainNo,
+                        @Param("departDate") LocalDate departDate);
+
     List<TrainDO> selectAll(@Param("offset") Long offset, @Param("limit") Long limit);
 
     long countAll();

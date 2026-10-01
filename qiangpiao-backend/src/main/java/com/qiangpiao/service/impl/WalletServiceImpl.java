@@ -50,6 +50,40 @@ public class WalletServiceImpl implements WalletService {
         return toVO(getOrCreate(userId));
     }
 
+    /**
+     * 注册礼包：先幂等查流水（并发下由 idempotent_key 唯一索引兜底），再开户 + 入账 + 记一笔「充值」流水。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public WalletVO grantRegisterGift(Long userId, BigDecimal giftAmount) {
+        BigDecimal gift = normalize(giftAmount);
+        if (userId == null) {
+            throw new BizException(ResultCode.BAD_REQUEST);
+        }
+        if (gift.compareTo(BigDecimal.ZERO) <= 0) {
+            log.info("注册礼包配置为 0，仅开通钱包：userId={}", userId);
+            return getWallet(userId);
+        }
+
+        String idempotentKey = Constants.WALLET_GIFT_IDEMPOTENT_PREFIX + userId;
+        WalletFlowDO exist = walletFlowMapper.selectByIdempotentKey(idempotentKey);
+        if (exist != null) {
+            log.info("注册礼包已发放，跳过重复赠送：userId={}, amount={}", userId, exist.getAmount());
+            WalletDO wallet = walletMapper.selectByUserId(userId);
+            return wallet == null ? getWallet(userId) : toVO(wallet);
+        }
+
+        getOrCreate(userId);
+        walletMapper.increaseBalance(userId, gift);
+        WalletDO updated = walletMapper.selectByUserId(userId);
+        insertFlow(userId, Constants.WALLET_GIFT_BIZ_NO_PREFIX + userId, Constants.WALLET_FLOW_RECHARGE,
+                "开户赠送", "新用户注册赠送初始余额 " + gift.toPlainString() + " 元",
+                gift, updated.getBalance(), "注册自动开通钱包并赠送", idempotentKey);
+
+        log.info("注册礼包发放成功：userId={}, gift={}, balance={}", userId, gift, updated.getBalance());
+        return toVO(updated);
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public WalletVO recharge(Long userId, RechargeDTO dto) {

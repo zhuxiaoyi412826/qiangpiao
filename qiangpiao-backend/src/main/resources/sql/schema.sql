@@ -10,8 +10,10 @@ CREATE TABLE IF NOT EXISTS t_user (
     username    VARCHAR(64)  NOT NULL UNIQUE COMMENT '用户名/登录账号',
     password    VARCHAR(128) NOT NULL COMMENT 'BCrypt 加密密码',
     real_name   VARCHAR(64)  DEFAULT NULL COMMENT '真实姓名',
-    phone       VARCHAR(20)  DEFAULT NULL COMMENT '手机号',
-    id_card     VARCHAR(32)  DEFAULT NULL COMMENT '身份证号',
+    -- 敏感字段存 AES 密文（"ENC:" 前缀 + Base64）：
+    --   手机号明文 11 字节 → 密文 28 字符；身份证明文 18 字节 → 密文 48 字符，故统一 64
+    phone       VARCHAR(64)  DEFAULT NULL COMMENT '手机号（AES 密文）',
+    id_card     VARCHAR(64)  DEFAULT NULL COMMENT '身份证号（AES 密文）',
     role        VARCHAR(20)  NOT NULL DEFAULT 'ROLE_USER' COMMENT '角色',
     status      TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：1-正常 0-禁用',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -97,7 +99,7 @@ CREATE TABLE IF NOT EXISTS t_order (
     carriage_no    INT           DEFAULT NULL COMMENT '车厢号',
     seat_no        VARCHAR(16)   DEFAULT NULL COMMENT '座位号',
     passenger_name VARCHAR(64)   NOT NULL COMMENT '乘客姓名',
-    id_card        VARCHAR(32)   DEFAULT NULL COMMENT '身份证号',
+    id_card        VARCHAR(64)   DEFAULT NULL COMMENT '身份证号（AES 密文，明文 18 位 → 密文 48 字符）',
     price          DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT '票价',
     status         TINYINT       NOT NULL DEFAULT 0 COMMENT '0-待支付 1-已支付 2-已取消 3-已退票 4-已超时',
     depart_date    DATE          DEFAULT NULL COMMENT '乘车日期（购票时快照，车次日期滚动时订单日期保持不变）',

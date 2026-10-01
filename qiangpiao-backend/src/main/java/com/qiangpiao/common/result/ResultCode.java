@@ -18,7 +18,8 @@ public enum ResultCode {
     NOT_FOUND(404, "资源不存在"),
     METHOD_NOT_ALLOWED(405, "请求方式不支持"),
     TOO_MANY_REQUESTS(429, "请求过于频繁，请稍后再试"),
-    SYSTEM_ERROR(500, "系统繁忙，请稍后再试"),
+    // 文案刻意区别于限流的「系统繁忙」：500 只代表服务端异常，便于一眼区分是限流还是真报错
+    SYSTEM_ERROR(500, "服务异常，请稍后重试"),
     SERVICE_UNAVAILABLE(503, "服务暂时不可用"),
 
     /* ========== 用户 / 认证 1000+ ========== */
@@ -46,6 +47,8 @@ public enum ResultCode {
     TRAIN_QUERY_DATE_INVALID(2008, "只能查询今天起 30 天内的车次"),
     TRAIN_DEPARTED(2009, "该车次已发车，无法购票"),
     TICKET_STOP_SELL(2010, "开车前 20 分钟停止售票"),
+    /** 同一车次号在同一日期已有班次（uk_train_date）：生成当日班次撞车 */
+    TRAIN_DATE_EXISTS(2011, "该日期的班次已存在，无需重复生成"),
     TICKET_NOT_ON_SALE(2011, "该车次尚未开始预售，预售期为 14 天"),
 
     /* ========== 秒杀 3000+ ========== */
@@ -94,6 +97,8 @@ public enum ResultCode {
     /** 车次售卖时间窗口：未开始 / 已结束 */
     SALE_NOT_START(4018, "该车次尚未开始售票，请等到售票开始时间"),
     SALE_ENDED(4019, "该车次售票已结束"),
+    /** 订单已支付：渠道回调先到、页面还是旧状态时重复点支付，提示刷新而非"状态不正确" */
+    ORDER_ALREADY_PAID(4025, "订单已支付，无需重复支付"),
 
     /* ========== 风控 / 限流 4020+ ========== */
     /** IP 维度限流 */

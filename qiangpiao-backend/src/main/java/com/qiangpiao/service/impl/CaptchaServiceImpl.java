@@ -46,8 +46,8 @@ public class CaptchaServiceImpl implements CaptchaService {
     private static final int BG_WIDTH = 320;
     private static final int BG_HEIGHT = 160;
     private static final int BLOCK_SIZE = 52;
-    /** 滑块允许误差（px） */
-    private static final int TOLERANCE = 6;
+    /** 滑块允许误差（px）：真人拖动很难精准到 1px，放宽到 8 避免「看着对齐了却一直失败」 */
+    private static final int TOLERANCE = 8;
 
     private final StringRedisTemplate stringRedisTemplate;
 

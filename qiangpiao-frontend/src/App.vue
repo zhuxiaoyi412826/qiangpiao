@@ -45,9 +45,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/store/user'
 import { useStationStore } from '@/store/station'
 
@@ -88,12 +88,49 @@ const activeMenu = computed(() => {
   return '/' + (route.path.split('/')[1] || 'trains')
 })
 
+/** 登录态心跳间隔：被管理端强制下线后，最迟 60s 内页面自动变回未登录 */
+const HEARTBEAT_MS = 60000
+let heartbeatTimer = null
+let lastCheckAt = 0
+
+/** 心跳校验：请求 /auth/info，token 已被拉黑时后端返回 401，request 层会派发 auth:expired */
+function checkLoginState() {
+  if (!userStore.isLogin) return
+  lastCheckAt = Date.now()
+  userStore.loadUserInfo()
+}
+
+/** 标签页切回来时补一次校验（10s 内的重复切换不查，省一次请求） */
+function onVisibilityChange() {
+  if (document.visibilityState !== 'visible' || !userStore.isLogin) return
+  if (Date.now() - lastCheckAt < 10000) return
+  checkLoginState()
+}
+
+/** 登录失效（登出 / 被强制下线 / 封号）：清状态 → 头部立刻变「登录 / 注册」 */
+function onAuthExpired() {
+  userStore.clearAuth()
+  ElMessage.warning('登录状态已失效（已退出或被强制下线），请重新登录')
+  if (route.meta.requiresAuth) {
+    router.push({ path: '/login', query: { redirect: route.fullPath } })
+  }
+}
+
 onMounted(() => {
   // 预加载车站（前端缓存优先）
   stationStore.loadStations()
   if (userStore.isLogin && !userStore.userInfo) {
     userStore.loadUserInfo()
   }
+  heartbeatTimer = setInterval(checkLoginState, HEARTBEAT_MS)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('auth:expired', onAuthExpired)
+})
+
+onBeforeUnmount(() => {
+  if (heartbeatTimer) clearInterval(heartbeatTimer)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  window.removeEventListener('auth:expired', onAuthExpired)
 })
 
 function handleLogout() {

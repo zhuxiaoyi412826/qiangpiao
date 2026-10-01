@@ -71,10 +71,19 @@ public class TrainServiceImpl implements TrainService {
     public PageResult<TrainVO> query(TrainQueryDTO queryDTO) {
         LocalDate today = LocalDate.now();
         LocalDate departDate = queryDTO.getDepartDate();
+        // 车次号统一大写，避免大小写不同导致缓存 key 分裂、LIKE 结果不一致
+        String trainNo = StringUtils.hasText(queryDTO.getTrainNo())
+                ? queryDTO.getTrainNo().trim().toUpperCase()
+                : null;
+        queryDTO.setTrainNo(trainNo);
+
         if (departDate == null) {
-            // 未指定日期时查当天，保证默认结果都是可买的车次
-            departDate = today;
-            queryDTO.setDepartDate(today);
+            if (trainNo == null) {
+                // 未指定日期时查当天，保证默认结果都是可买的车次
+                departDate = today;
+                queryDTO.setDepartDate(today);
+            }
+            // 按车次号查询且不带日期：返回该车次全部未来班次，不限制在当天
         } else if (departDate.isBefore(today) || departDate.isAfter(today.plusDays(queryDays - 1L))) {
             throw new BizException(ResultCode.TRAIN_QUERY_DATE_INVALID);
         }
@@ -84,8 +93,10 @@ public class TrainServiceImpl implements TrainService {
         String from = StringUtils.hasText(queryDTO.getFromStation()) ? queryDTO.getFromStation() : "";
         String to = StringUtils.hasText(queryDTO.getToStation()) ? queryDTO.getToStation() : "";
         String date = queryDTO.getDepartDate() == null ? "" : queryDTO.getDepartDate().toString();
+        String no = trainNo == null ? "" : trainNo;
 
-        String key = RedisKeys.trainList(from, to, date) + ":" + pageNum + ":" + pageSize;
+        // 缓存 key 必须带上车次号，否则「按站查」与「按车次号查」会互相串味
+        String key = RedisKeys.trainList(from, to, date) + ":" + no + ":" + pageNum + ":" + pageSize;
         PageResult<TrainVO> result = cacheService.get(
                 key,
                 new TypeReference<PageResult<TrainVO>>() {
@@ -198,9 +209,15 @@ public class TrainServiceImpl implements TrainService {
         String from = StringUtils.hasText(queryDTO.getFromStation()) ? queryDTO.getFromStation() : null;
         String to = StringUtils.hasText(queryDTO.getToStation()) ? queryDTO.getToStation() : null;
 
+        // 填了车次号就按车次号查：不看出发 / 到达站（两者互斥，前端也是这个交互）
+        String trainNo = StringUtils.hasText(queryDTO.getTrainNo()) ? queryDTO.getTrainNo() : null;
+
         List<TrainDO> trains;
         long total;
-        if (from == null && to == null && queryDTO.getDepartDate() == null) {
+        if (trainNo != null) {
+            trains = trainMapper.selectByTrainNo(trainNo, queryDTO.getDepartDate(), offset, (long) pageSize);
+            total = trainMapper.countByTrainNo(trainNo, queryDTO.getDepartDate());
+        } else if (from == null && to == null && queryDTO.getDepartDate() == null) {
             trains = trainMapper.selectAll(offset, (long) pageSize);
             total = trainMapper.countAll();
         } else if (segmentStockService.enabled() && from != null && to != null) {

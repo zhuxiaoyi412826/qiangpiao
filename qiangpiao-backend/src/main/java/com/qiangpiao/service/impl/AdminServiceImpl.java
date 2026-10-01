@@ -4,6 +4,7 @@ import com.qiangpiao.common.constant.Constants;
 import com.qiangpiao.common.exception.BizException;
 import com.qiangpiao.common.result.PageResult;
 import com.qiangpiao.common.result.ResultCode;
+import com.qiangpiao.common.util.SecurityUtils;
 import com.qiangpiao.common.util.SensitiveCrypto;
 import com.qiangpiao.dataobject.AnnouncementDO;
 import com.qiangpiao.dataobject.CarriageDO;
@@ -18,6 +19,7 @@ import com.qiangpiao.dataobject.TrainStopDO;
 import com.qiangpiao.dataobject.UserDO;
 import com.qiangpiao.dto.AdminOrderQueryDTO;
 import com.qiangpiao.mapper.AdminMapper;
+import com.qiangpiao.mapper.TrainMapper;
 import com.qiangpiao.service.AdminService;
 import com.qiangpiao.service.OrderLogService;
 import com.qiangpiao.service.SeckillFlowService;
@@ -48,6 +50,7 @@ import java.util.Map;
 public class AdminServiceImpl implements AdminService {
 
     private final AdminMapper adminMapper;
+    private final TrainMapper trainMapper;
     private final TrainService trainService;
     private final SensitiveCrypto crypto;
     private final OrderLogService orderLogService;
@@ -202,6 +205,18 @@ public class AdminServiceImpl implements AdminService {
         if (sourceTrainId == null || date == null) {
             throw new BizException(ResultCode.BAD_REQUEST);
         }
+        // 前置查重：t_train 有 uk_train_date（车次号 + 日期唯一），
+        // 直接 copy 会撞唯一键并被兜底成 500，管理端根本看不出原因。
+        // 这里先查一次，给出「哪趟车哪天已存在、已有班次 ID 是多少」的明确提示。
+        TrainDO source = trainMapper.selectById(sourceTrainId);
+        if (source == null) {
+            throw new BizException(ResultCode.TRAIN_NOT_FOUND);
+        }
+        Long existId = trainMapper.selectIdByNoAndDate(source.getTrainNo(), date);
+        if (existId != null) {
+            throw new BizException(ResultCode.TRAIN_DATE_EXISTS,
+                    "车次 " + source.getTrainNo() + " 在 " + date + " 的班次已存在（ID：" + existId + "），无需重复生成");
+        }
         int rows = adminMapper.copyTrain(sourceTrainId, date);
         if (rows <= 0) {
             throw new BizException(ResultCode.BAD_REQUEST);
@@ -335,6 +350,11 @@ public class AdminServiceImpl implements AdminService {
     public int kickUser(Long userId) {
         if (userId == null) {
             throw new BizException(ResultCode.BAD_REQUEST);
+        }
+        // 踢自己会连带把当前操作的管理员登出（后续请求全 401），属误操作，直接拦掉
+        Long currentUserId = SecurityUtils.currentUserId();
+        if (currentUserId != null && currentUserId.equals(userId)) {
+            throw new BizException(ResultCode.BAD_REQUEST.getCode(), "不能对自己执行强制下线");
         }
         int kicked = tokenService.kickUser(userId);
         log.info("管理端强制下线：userId={}, 失效 token 数={}", userId, kicked);

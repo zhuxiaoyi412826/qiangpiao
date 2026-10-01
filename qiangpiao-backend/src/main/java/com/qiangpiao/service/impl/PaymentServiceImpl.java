@@ -82,6 +82,9 @@ public class PaymentServiceImpl implements PaymentService {
     /** 模拟渠道回调延迟（毫秒） */
     @Value("${pay.mock-callback-delay-ms:3000}")
     private long mockCallbackDelayMs;
+    /** 模拟渠道是否自动回调成功：false 时由页面手动选择结果（默认） */
+    @Value("${pay.mock-auto-callback:false}")
+    private boolean mockAutoCallback;
 
     /** 模拟渠道的异步回调线程 */
     private final ScheduledExecutorService callbackScheduler =
@@ -112,6 +115,12 @@ public class PaymentServiceImpl implements PaymentService {
             throw new BizException(ResultCode.FORBIDDEN);
         }
         if (!Objects.equals(order.getStatus(), Constants.ORDER_STATUS_WAIT_PAY)) {
+            // 典型场景：模拟渠道约 3 秒后回调，订单已置为已支付，
+            // 而用户页面还是旧的「待支付」，再点一次就会撞到这里。
+            // 单独给「已支付」文案，前端据此提示并刷新，而不是干巴巴的"订单状态不正确"。
+            if (Objects.equals(order.getStatus(), Constants.ORDER_STATUS_PAID)) {
+                throw new BizException(ResultCode.ORDER_ALREADY_PAID);
+            }
             throw new BizException(ResultCode.ORDER_STATUS_ERROR);
         }
         if (order.getExpireTime() != null && order.getExpireTime().isBefore(LocalDateTime.now())) {
@@ -133,7 +142,7 @@ public class PaymentServiceImpl implements PaymentService {
         PaymentDO last = paymentMapper.selectLatestByIdempotent(base);
         if (last != null && Objects.equals(last.getStatus(), Constants.PAY_STATUS_PAYING)) {
             log.info("重复发起支付，复用原支付单：payNo={}, orderNo={}", last.getPayNo(), orderNo);
-            return toVO(last);
+            return withAutoCallback(toVO(last));
         }
 
         PaymentDO payment = new PaymentDO();
@@ -153,15 +162,23 @@ public class PaymentServiceImpl implements PaymentService {
         payment.setExpireTime(expire);
         paymentMapper.insert(payment);
 
-        // 模拟渠道：事务提交后延迟触发异步回调（真实渠道由对方服务器回调 /notify）
-        scheduleMockCallback(payment.getPayNo(), RESULT_SUCCESS);
+        // 模拟渠道：延迟（默认 15 秒）自动回调成功，期间页面可手动改判。
+        // 手动先点的结果一定生效：支付单一旦终态，后来的自动回调会被幂等去重，不会再把订单改成已支付。
+        if (mockAutoCallback) {
+            scheduleMockCallback(payment.getPayNo(), RESULT_SUCCESS);
+            log.info("模拟渠道将在 {}ms 后自动回调成功（页面可在此期间手动改判）：payNo={}, orderNo={}",
+                    mockCallbackDelayMs, payment.getPayNo(), orderNo);
+        } else {
+            log.info("模拟渠道自动回调已关闭，等待页面手动选择支付结果：payNo={}, orderNo={}",
+                    payment.getPayNo(), orderNo);
+        }
 
         orderLogService.log(orderNo, OrderAction.PAY_CREATE,
                 "支付单 " + payment.getPayNo() + " 已创建，金额 " + amount + " 元，方式 " + type + "，等待渠道回调",
                 String.valueOf(order.getUserId()));
         log.info("发起支付成功：payNo={}, orderNo={}, userId={}, amount={}, payType={}",
                 payment.getPayNo(), orderNo, order.getUserId(), amount, type);
-        return toVO(payment);
+        return withAutoCallback(toVO(payment));
     }
 
     @Override
@@ -421,6 +438,15 @@ public class PaymentServiceImpl implements PaymentService {
                 .createTime(payment.getCreateTime())
                 .failReason(payment.getFailReason())
                 .build();
+    }
+
+    /**
+     * 告知前端「多久后会自动回调成功」，页面据此倒计时提示用户抓紧选择；
+     * 0 表示不会自动回调，必须手动选择结果。
+     */
+    private PaymentVO withAutoCallback(PaymentVO vo) {
+        vo.setAutoCallbackSeconds(mockAutoCallback ? (int) Math.max(mockCallbackDelayMs / 1000, 0) : 0);
+        return vo;
     }
 
     /**

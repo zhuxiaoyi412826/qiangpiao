@@ -17,9 +17,10 @@ public class OrderTimeoutTask {
     private final OrderService orderService;
 
     /**
-     * 每分钟执行一次
+     * 每 30 秒执行一次：订单支付时限只有 5 分钟（order.pay-timeout-minutes），
+     * 扫描间隔太长会让"已超时"的订单还挂在待支付里。
      */
-    @Scheduled(fixedDelay = 60_000, initialDelay = 30_000)
+    @Scheduled(fixedDelay = 30_000, initialDelay = 20_000)
     public void closeExpiredOrders() {
         try {
             orderService.closeExpiredOrders();
