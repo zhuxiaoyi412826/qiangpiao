@@ -1,7 +1,9 @@
 package com.qiangpiao.service;
 
 import com.qiangpiao.bo.RangeBO;
+import com.qiangpiao.dataobject.TrainSegmentStockDO;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -63,4 +65,24 @@ public interface SegmentStockService {
 
     /** 车次的经停站数量（用于判断是否存在分段数据） */
     int stopCount(Long trainId);
+
+    /**
+     * 区间票价：OD 区间覆盖的每一段段价之和（分段计价）。
+     *
+     * <pre>
+     *   段价齐全  → Σ段价（准确口径，与实际扣款一致）
+     *   段价缺失  → 按里程比例折算全程价（缺里程退化为站序比例）
+     *   都算不出  → 退回全程价 fullPrice（与改造前一致，不会出现 0 元单）
+     * </pre>
+     *
+     * @param fullPrice 席别全程票价（t_train_stock.price），作为兜底与折算基数
+     * @return 该区间应收票价
+     */
+    BigDecimal fare(Long trainId, Integer seatType, RangeBO range, BigDecimal fullPrice);
+
+    /** 后台维护某一段的票价；传 null 表示清空（随后自动按里程折算） */
+    int updateSegmentPrice(Long trainId, Integer seatType, Integer segIndex, BigDecimal price);
+
+    /** 车次的全部分段库存与段价（后台段价维护页用）；能力未开启时返回空列表 */
+    List<TrainSegmentStockDO> listSegments(Long trainId);
 }

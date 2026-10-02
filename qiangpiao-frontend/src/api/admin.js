@@ -27,8 +27,13 @@ export const generateDailyTrain = (id, date) =>
 /** 售卖时间窗口：start / end 传空字符串表示不限时 */
 export const updateSaleWindow = (id, start, end) =>
     request.post(`/admin/trains/${id}/sale-window`, null, { params: { start, end } })
-/** 初始化区间库存（相邻站单段）并预热到 Redis */
+/** 初始化区间库存（相邻站单段，并自动按里程折算段价）并预热到 Redis */
 export const initSegmentStock = id => request.post(`/admin/trains/${id}/segment/init`)
+/** 区间库存与各段段价 */
+export const adminSegments = id => request.get(`/admin/trains/${id}/segments`)
+/** 保存段价：segments = [{seatType, segIndex, price}]，price 为 null 表示清空后按里程自动折算 */
+export const saveAdminSegments = (id, segments) =>
+    request.post(`/admin/trains/${id}/segment/price`, segments)
 
 // ============ 票价 ============
 export const updateStockPrice = (id, price) =>
@@ -78,3 +83,16 @@ export const adminUserGrowth = () => request.get('/admin/stats/user-growth')
 export function exportReport(type) {
     return request.get(`/admin/stats/export`, { params: { type }, responseType: 'blob' })
 }
+
+// ============ 资金对账（Job 发现差异 → 落单据 → 人工审核 → 退补账） ============
+/** 异常单据列表：status 为空查全部；0 待审核 1 已通过 2 已驳回 3 已关闭 */
+export const adminReconBills = params => request.get('/admin/recon/bills', { params })
+/** 待审核数量：用于页签上的红点提示 */
+export const adminReconPendingCount = () => request.get('/admin/recon/bills/pending-count')
+/** 审核：approve=true 通过后按建议动作执行退补账；remark 选填，为空时不传 */
+export const auditReconBill = (billNo, approve, remark) =>
+    request.post(`/admin/recon/bills/${billNo}/audit`, null, {
+        params: { approve, ...(remark ? { remark } : {}) }
+    })
+/** 手动跑一轮对账（不等定时任务） */
+export const runRecon = () => request.post('/admin/recon/run')

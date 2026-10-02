@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -15,11 +16,11 @@ import java.util.List;
 @Repository
 public interface TrainSegmentStockMapper {
 
-    @Select("SELECT id, train_id, seat_type, seg_index, total_count, available_count, version, create_time, update_time" +
+    @Select("SELECT id, train_id, seat_type, seg_index, total_count, available_count, price, version, create_time, update_time" +
             " FROM t_train_segment_stock WHERE train_id = #{trainId} ORDER BY seat_type, seg_index")
     List<TrainSegmentStockDO> selectByTrainId(@Param("trainId") Long trainId);
 
-    @Select("SELECT id, train_id, seat_type, seg_index, total_count, available_count, version, create_time, update_time" +
+    @Select("SELECT id, train_id, seat_type, seg_index, total_count, available_count, price, version, create_time, update_time" +
             " FROM t_train_segment_stock WHERE train_id = #{trainId} AND seat_type = #{seatType}" +
             " AND seg_index >= #{fromOrder} AND seg_index < #{toOrder} ORDER BY seg_index")
     List<TrainSegmentStockDO> selectRange(@Param("trainId") Long trainId, @Param("seatType") Integer seatType,
@@ -33,6 +34,30 @@ public interface TrainSegmentStockMapper {
             " AND seg_index >= #{fromOrder} AND seg_index < #{toOrder}")
     Integer minAvailable(@Param("trainId") Long trainId, @Param("seatType") Integer seatType,
                          @Param("fromOrder") Integer fromOrder, @Param("toOrder") Integer toOrder);
+
+    /**
+     * 区间票价 = 覆盖各段段价之和。
+     *
+     * @return 段价之和；只要有一段 price 为 NULL 或区间无段数据，SUM 就返回 NULL（调用方据此降级折算）
+     */
+    @Select("SELECT SUM(price) FROM t_train_segment_stock" +
+            " WHERE train_id = #{trainId} AND seat_type = #{seatType}" +
+            " AND seg_index >= #{fromOrder} AND seg_index < #{toOrder}")
+    BigDecimal sumPrice(@Param("trainId") Long trainId, @Param("seatType") Integer seatType,
+                        @Param("fromOrder") Integer fromOrder, @Param("toOrder") Integer toOrder);
+
+    /** 后台维护段价：直接覆盖（含置空） */
+    @Update("UPDATE t_train_segment_stock SET price = #{price}, update_time = NOW()" +
+            " WHERE train_id = #{trainId} AND seat_type = #{seatType} AND seg_index = #{segIndex}")
+    int updatePrice(@Param("trainId") Long trainId, @Param("seatType") Integer seatType,
+                    @Param("segIndex") Integer segIndex, @Param("price") BigDecimal price);
+
+    /** 初始化时补齐自动折算的段价：已经人工定价的段不会被覆盖 */
+    @Update("UPDATE t_train_segment_stock SET price = #{price}, update_time = NOW()" +
+            " WHERE train_id = #{trainId} AND seat_type = #{seatType} AND seg_index = #{segIndex}" +
+            " AND price IS NULL")
+    int updatePriceIfNull(@Param("trainId") Long trainId, @Param("seatType") Integer seatType,
+                          @Param("segIndex") Integer segIndex, @Param("price") BigDecimal price);
 
     /**
      * 占用区间：覆盖的每一段都扣 count 张，available_count 不足的段不会被更新（行级条件保证不超卖）。
@@ -57,9 +82,9 @@ public interface TrainSegmentStockMapper {
                       @Param("fromOrder") Integer fromOrder, @Param("toOrder") Integer toOrder,
                       @Param("count") int count);
 
-    @Insert("INSERT INTO t_train_segment_stock (train_id, seat_type, seg_index, total_count, available_count," +
+    @Insert("INSERT INTO t_train_segment_stock (train_id, seat_type, seg_index, total_count, available_count, price," +
             " version, create_time, update_time)" +
-            " VALUES (#{trainId}, #{seatType}, #{segIndex}, #{totalCount}, #{availableCount}, 0, NOW(), NOW())" +
+            " VALUES (#{trainId}, #{seatType}, #{segIndex}, #{totalCount}, #{availableCount}, #{price}, 0, NOW(), NOW())" +
             " ON DUPLICATE KEY UPDATE total_count = VALUES(total_count), update_time = NOW()")
     int upsert(TrainSegmentStockDO stock);
 

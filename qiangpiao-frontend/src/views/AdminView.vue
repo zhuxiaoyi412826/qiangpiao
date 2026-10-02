@@ -109,7 +109,7 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="420" fixed="right">
+            <el-table-column label="操作" width="500" fixed="right">
               <template #default="{ row }">
                 <el-button link :type="row.status === 1 ? 'danger' : 'success'" size="small"
                            @click="toggleTrain(row)">
@@ -120,6 +120,7 @@
                 <el-button link type="warning" size="small" @click="openCarriages(row)">车厢</el-button>
                 <el-button link type="info" size="small" @click="openSaleWindow(row)">售卖窗口</el-button>
                 <el-button link type="info" size="small" @click="initSegments(row)">区间库存</el-button>
+                <el-button link type="success" size="small" @click="openSegments(row)">区间票价</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -445,6 +446,82 @@
                          :current-page="flowQuery.pageNum" :page-size="flowQuery.pageSize" :total="flowTotal"
                          @current-change="p => { flowQuery.pageNum = p; loadFlows() }"/>
         </el-tab-pane>
+
+        <!-- 资金对账：Job 只落单据不自动改账，退补账必须在这里人工点确认 -->
+        <el-tab-pane label="资金对账" name="recon">
+          <el-form :inline="true" size="small" @submit.prevent>
+            <el-form-item label="状态">
+              <el-select v-model="reconQuery.status" clearable style="width: 130px" placeholder="全部">
+                <el-option :value="0" label="待审核"/>
+                <el-option :value="1" label="审核通过"/>
+                <el-option :value="2" label="已驳回"/>
+                <el-option :value="3" label="已关闭"/>
+              </el-select>
+            </el-form-item>
+            <el-form-item label="差异类型">
+              <el-select v-model="reconQuery.diffType" clearable filterable style="width: 230px" placeholder="全部">
+                <el-option v-for="t in RECON_DIFF_TYPES" :key="t.value" :value="t.value" :label="t.label"/>
+              </el-select>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" size="small" @click="reloadRecon">查询</el-button>
+              <el-button size="small" @click="loadRecon">刷新</el-button>
+              <el-button size="small" type="warning" @click="doRunRecon">立即对账</el-button>
+            </el-form-item>
+          </el-form>
+
+          <el-alert v-if="reconPending > 0" class="mt" type="error" show-icon :closable="false"
+                    :title="`有 ${reconPending} 条账目差异待审核，通过后系统会立即执行退补账，请核对后再操作`"/>
+
+          <el-table :data="reconBills" border size="small" class="mt" v-loading="reconLoading">
+            <el-table-column prop="billNo" label="单据号" width="180"/>
+            <el-table-column label="差异类型" min-width="190">
+              <template #default="{ row }">{{ reconDiffText(row.diffType) }}</template>
+            </el-table-column>
+            <el-table-column label="业务对象" width="150">
+              <template #default="{ row }">{{ reconBizText(row.bizType) }}</template>
+            </el-table-column>
+            <el-table-column prop="bizNo" label="业务单号" min-width="180"/>
+            <el-table-column label="用户" width="90">
+              <template #default="{ row }">{{ row.userId ?? '-' }}</template>
+            </el-table-column>
+            <el-table-column label="应有" width="100">
+              <template #default="{ row }">¥{{ row.expectAmount }}</template>
+            </el-table-column>
+            <el-table-column label="实有" width="100">
+              <template #default="{ row }">¥{{ row.actualAmount }}</template>
+            </el-table-column>
+            <el-table-column label="差异额" width="110">
+              <template #default="{ row }">
+                <span :class="Number(row.diffAmount) === 0 ? '' : 'amount-diff'">¥{{ row.diffAmount }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="风险" width="80">
+              <template #default="{ row }">
+                <el-tag size="small" :type="reconRiskType(row.riskLevel)">{{ reconRiskText(row.riskLevel) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag size="small" :type="reconStatusType(row.status)">{{ reconStatusText(row.status) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="建议动作" width="130">
+              <template #default="{ row }">{{ reconActionText(row.handleAction) }}</template>
+            </el-table-column>
+            <el-table-column prop="createTime" label="开单时间" width="170"/>
+            <el-table-column label="操作" width="110" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" size="small" @click="openReconAudit(row)">
+                  {{ row.status === 0 ? '审核' : '查看' }}
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-pagination class="pager" background layout="total, prev, pager, next"
+                         :current-page="reconQuery.pageNum" :page-size="reconQuery.pageSize" :total="reconTotal"
+                         @current-change="p => { reconQuery.pageNum = p; loadRecon() }"/>
+        </el-tab-pane>
       </el-tabs>
     </div>
 
@@ -613,6 +690,36 @@
       </template>
     </el-dialog>
 
+    <!-- 区间票价（分段计价） -->
+    <el-dialog v-model="segVisible" :title="`区间票价 · ${segTrainNo}`" width="780px">
+      <p class="muted">段 i 表示「第 i 站 → 第 i+1 站」。区间票价 = 覆盖各段段价之和；留空表示按里程比例自动折算席别全程价。</p>
+      <el-table :data="segRows" border size="small" class="mt" max-height="420">
+        <el-table-column label="段" min-width="220">
+          <template #default="{ row }">{{ segName(row.segIndex) }}</template>
+        </el-table-column>
+        <el-table-column label="席别" width="110">
+          <template #default="{ row }">{{ seatTypeName(row.seatType) }}</template>
+        </el-table-column>
+        <el-table-column label="段价" width="190">
+          <template #default="{ row }">
+            <el-input-number v-model="row.price" :min="0" :step="5" size="small" controls-position="right"
+                             placeholder="留空=自动折算"/>
+          </template>
+        </el-table-column>
+        <el-table-column prop="totalCount" label="总座位" width="90"/>
+        <el-table-column prop="availableCount" label="余票" width="90"/>
+        <el-table-column label="操作" width="90">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" @click="saveSegmentPrice(row)">保存</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="segVisible = false">关闭</el-button>
+        <el-button type="primary" @click="saveAllSegments">保存全部</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 公告编辑 -->
     <el-dialog v-model="noticeVisible" :title="noticeForm.id ? '编辑公告' : '发布公告'" width="560px">
       <el-form :model="noticeForm" label-width="90px">
@@ -667,6 +774,51 @@
         </div>
       </template>
     </el-drawer>
+
+    <!-- 对账单据审核 -->
+    <el-dialog v-model="reconAuditVisible" title="对账单据审核" width="620px">
+      <template v-if="currentBill">
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="单据号">{{ currentBill.billNo }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag size="small" :type="reconStatusType(currentBill.status)">
+              {{ reconStatusText(currentBill.status) }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="差异类型">{{ reconDiffText(currentBill.diffType) }}</el-descriptions-item>
+          <el-descriptions-item label="风险等级">
+            <el-tag size="small" :type="reconRiskType(currentBill.riskLevel)">
+              {{ reconRiskText(currentBill.riskLevel) }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="业务对象">{{ reconBizText(currentBill.bizType) }}</el-descriptions-item>
+          <el-descriptions-item label="业务单号">{{ currentBill.bizNo }}</el-descriptions-item>
+          <el-descriptions-item label="应有金额">¥{{ currentBill.expectAmount }}</el-descriptions-item>
+          <el-descriptions-item label="实有金额">¥{{ currentBill.actualAmount }}</el-descriptions-item>
+          <el-descriptions-item label="差异额">¥{{ currentBill.diffAmount }}</el-descriptions-item>
+          <el-descriptions-item label="开单时间">{{ currentBill.createTime }}</el-descriptions-item>
+          <el-descriptions-item label="差异说明" :span="2">{{ currentBill.detail }}</el-descriptions-item>
+          <el-descriptions-item label="审核人">{{ currentBill.operator || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="审核意见">{{ currentBill.auditRemark || '-' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <el-alert v-if="currentBill.status === 0" class="mt" type="warning" show-icon :closable="false"
+                  :title="`通过后系统将执行「${reconActionText(currentBill.handleAction)}」，金额 ¥${Math.abs(currentBill.diffAmount || 0)}，操作立即生效且会记入钱包流水`"/>
+
+        <el-form class="mt" label-width="80px" size="small" v-if="currentBill.status === 0">
+          <el-form-item label="审核意见">
+            <el-input v-model="reconRemark" type="textarea" :rows="2" placeholder="选填，会随单据归档"/>
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button @click="reconAuditVisible = false">关闭</el-button>
+        <template v-if="currentBill && currentBill.status === 0">
+          <el-button type="info" @click="submitReconAudit(false)">驳回</el-button>
+          <el-button type="primary" @click="submitReconAudit(true)">通过并退补账</el-button>
+        </template>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -742,6 +894,14 @@ const stopRows = ref([])
 const carriageVisible = ref(false)
 const carriageRows = ref([])
 
+// 区间票价（分段计价）：段价之和 = 区间票价，留空按里程比例自动折算
+const segVisible = ref(false)
+const segTrainId = ref(null)
+const segTrainNo = ref('')
+const segRows = ref([])
+/** 时刻表：只用来把 segIndex 翻译成「A站 → B站」，不参与保存 */
+const segStops = ref([])
+
 // 票价 / 库存
 const stocks = ref([])
 const stockPage = ref(1)
@@ -786,6 +946,67 @@ const blacklist = ref([])
 const riskEvents = ref([])
 const blockForm = ref({ ip: '', seconds: 1800, reason: '' })
 
+// 资金对账：单据列表 + 待审核数（红点）+ 审核弹窗
+const reconBills = ref([])
+const reconTotal = ref(0)
+const reconLoading = ref(false)
+const reconPending = ref(0)
+/** 默认只看待审核——审核页的核心是「待处理的差异」，不是翻历史 */
+const reconQuery = ref({ status: 0, diffType: null, pageNum: 1, pageSize: 10 })
+const reconAuditVisible = ref(false)
+const currentBill = ref(null)
+const reconRemark = ref('')
+
+/* 单据文案映射：后端出参是 DO（只有码值），文案在前端维护，与后端 Constants 保持一致 */
+const RECON_STATUS_TEXT = { 0: '待审核', 1: '审核通过', 2: '已驳回', 3: '已关闭' }
+const RECON_BIZ_TEXT = {
+    PAYMENT: '支付单',
+    ORDER: '订单',
+    REFUND: '退款',
+    WALLET: '钱包',
+    PLATFORM: '平台收入'
+}
+const RECON_ACTION_TEXT = {
+    NONE: '仅记录',
+    REFUND_TO_USER: '退钱给用户',
+    CHARGE_USER: '向用户补扣',
+    FIX_PLATFORM: '平台账户冲正'
+}
+const RECON_DIFF_TYPES = [
+    { value: 'PAY_NO_FLOW', label: '支付成功但无消费流水' },
+    { value: 'PAY_AMOUNT_DIFF', label: '支付金额与流水不一致' },
+    { value: 'PAY_MULTI_FLOW', label: '同一订单多笔消费流水' },
+    { value: 'ORDER_NO_PAYMENT', label: '订单已支付但无成功支付单' },
+    { value: 'REFUND_NO_FLOW', label: '订单已退票但无退款流水' },
+    { value: 'REFUND_AMOUNT_DIFF', label: '退款金额与流水不一致' },
+    { value: 'WALLET_BALANCE_DIFF', label: '钱包余额与流水累计不一致' },
+    { value: 'WALLET_NEGATIVE', label: '钱包余额为负' },
+    { value: 'PLATFORM_INCOME_DIFF', label: '用户消费与平台收入不一致' }
+]
+
+function reconStatusText(status) {
+    return RECON_STATUS_TEXT[status] || '未知'
+}
+function reconStatusType(status) {
+    return status === 0 ? 'danger' : status === 1 ? 'success' : status === 2 ? 'warning' : 'info'
+}
+function reconBizText(bizType) {
+    return RECON_BIZ_TEXT[bizType] || bizType || '-'
+}
+function reconActionText(action) {
+    return RECON_ACTION_TEXT[action] || '仅记录'
+}
+function reconDiffText(diffType) {
+    const hit = RECON_DIFF_TYPES.find(t => t.value === diffType)
+    return hit ? hit.label : (diffType || '-')
+}
+function reconRiskText(level) {
+    return level === 3 ? '高' : level === 2 ? '中' : '低'
+}
+function reconRiskType(level) {
+    return level === 3 ? 'danger' : level === 2 ? 'warning' : 'info'
+}
+
 // 后台数据量大（车次 2700 / 库存 8000 / 车站 3000），首屏只加载当前页签，切页签时再加载
 const loadedTabs = ref(new Set())
 const TAB_LOADERS = {
@@ -799,15 +1020,16 @@ const TAB_LOADERS = {
   users: loadUsers,
   notice: loadNotices,
   monitor: loadMonitor,
-  risk: loadRisk
+  risk: loadRisk,
+  recon: loadRecon
 }
 
 async function ensureTab(name) {
   const loader = TAB_LOADERS[name]
   if (!loader) return
-  // 监控 / 风控是实时数据（余票、锁票、风控事件随时在变），每次切进来都重新拉，
+  // 监控 / 风控 / 对账是实时数据（余票、锁票、风控事件、账目差异随时在变），每次切进来都重新拉，
   // 否则停在首次加载的快照上，看起来就像"页面是空的"
-  if (name === 'monitor' || name === 'risk') {
+  if (name === 'monitor' || name === 'risk' || name === 'recon') {
     await loader()
     return
   }
@@ -824,6 +1046,123 @@ watch(tab, v => {
 })
 
 // ============ 数据加载 ============
+/** 段名：把 segIndex 翻译成「A站 → B站」，没有时刻表就退化为序号 */
+function segName(segIndex) {
+  const a = segStops.value.find(s => s.stopOrder === segIndex)
+  const b = segStops.value.find(s => s.stopOrder === segIndex + 1)
+  return `${a ? a.stationName : '第' + segIndex + '站'} → ${b ? b.stationName : '第' + (segIndex + 1) + '站'}`
+}
+
+async function openSegments(row) {
+  segTrainId.value = row.id
+  segTrainNo.value = row.trainNo
+  segRows.value = []
+  segStops.value = []
+  segVisible.value = true
+  try {
+    const [segs, stops] = await Promise.all([api.adminSegments(row.id), api.adminStops(row.id)])
+    segRows.value = segs || []
+    segStops.value = stops || []
+    if (!segRows.value.length) {
+      ElMessage.warning('该车次还没有区间库存，请先点「区间库存」初始化，再来定价')
+    }
+  } catch (e) {
+    ElMessage.error(e.message || '段价加载失败')
+  }
+}
+
+async function saveSegmentPrice(row) {
+  try {
+    await api.saveAdminSegments(segTrainId.value,
+      [{ seatType: row.seatType, segIndex: row.segIndex, price: row.price }])
+    ElMessage.success('段价已保存')
+  } catch (e) {
+    ElMessage.error(e.message || '段价保存失败')
+  }
+}
+
+async function saveAllSegments() {
+  const payload = segRows.value.map(r => ({ seatType: r.seatType, segIndex: r.segIndex, price: r.price }))
+  if (!payload.length) {
+    return ElMessage.warning('没有可保存的段，请先初始化区间库存')
+  }
+  try {
+    await api.saveAdminSegments(segTrainId.value, payload)
+    ElMessage.success(`已保存 ${payload.length} 段票价`)
+    segVisible.value = false
+  } catch (e) {
+    ElMessage.error(e.message || '段价保存失败')
+  }
+}
+
+async function loadRecon() {
+  reconLoading.value = true
+  try {
+    const data = await api.adminReconBills({
+      status: reconQuery.value.status,
+      diffType: reconQuery.value.diffType || null,
+      pageNum: reconQuery.value.pageNum,
+      pageSize: reconQuery.value.pageSize
+    })
+    reconBills.value = data.list || []
+    reconTotal.value = data.total || 0
+    reconPending.value = (await api.adminReconPendingCount()) || 0
+  } catch (e) {
+    ElMessage.error(e.message || '对账单据加载失败')
+  } finally {
+    reconLoading.value = false
+  }
+}
+
+function reloadRecon() {
+  reconQuery.value.pageNum = 1
+  loadRecon()
+}
+
+/** 手动跑一轮对账：不等定时任务，适合改完数据立刻验证 */
+async function doRunRecon() {
+  try {
+    const r = await api.runRecon()
+    ElMessage.success(`对账完成：核对 ${r.scanned} 项，新增差异 ${r.newBills} 条，自动关闭 ${r.closedBills} 条`)
+    await loadRecon()
+  } catch (e) {
+    ElMessage.error(e.message || '对账执行失败')
+  }
+}
+
+function openReconAudit(row) {
+  currentBill.value = row
+  reconRemark.value = ''
+  reconAuditVisible.value = true
+}
+
+/**
+ * 审核：通过会真的动钱，所以加一道二次确认，把「要执行什么动作、多少钱」摆出来。
+ * 驳回只改单据状态，不动账。
+ */
+async function submitReconAudit(approve) {
+  const bill = currentBill.value
+  if (!bill) return
+  try {
+    if (approve) {
+      await ElMessageBox.confirm(
+        `确认通过后将执行「${reconActionText(bill.handleAction)}」，金额 ¥${Math.abs(bill.diffAmount || 0)}，立即生效且不可撤销。是否继续？`,
+        '资金操作确认',
+        { type: 'warning', confirmButtonText: '确认通过', cancelButtonText: '再看看' }
+      )
+    }
+    await api.auditReconBill(bill.billNo, approve, reconRemark.value)
+    ElMessage.success(approve ? '审核通过，退补账已完成' : '已驳回')
+    reconAuditVisible.value = false
+    reconRemark.value = ''
+    await loadRecon()
+  } catch (e) {
+    // 取消确认框 / 关闭弹窗不算错误，静默返回
+    if (e === 'cancel' || e === 'close') return
+    ElMessage.error(e.message || '审核失败')
+  }
+}
+
 async function loadRisk() {
   try {
     const map = await api.adminBlacklist()
@@ -1203,4 +1542,6 @@ async function doExport(type) {
 .export-bar { margin-top: 12px; display: flex; gap: 8px; }
 .pager { margin-top: 12px; justify-content: flex-end; }
 .log-title { font-weight: 600; }
+/* 差异额是审核时第一眼要看的数，标红加粗 */
+.amount-diff { color: #f56c6c; font-weight: 600; }
 </style>

@@ -75,7 +75,8 @@ const adminMenus = [
   { tab: 'users', label: '用户管理' },
   { tab: 'notice', label: '公告管理' },
   { tab: 'monitor', label: '票务监控' },
-  { tab: 'risk', label: '风控管理' }
+  { tab: 'risk', label: '风控管理' },
+  { tab: 'recon', label: '资金对账' }
 ]
 
 const activeMenu = computed(() => {

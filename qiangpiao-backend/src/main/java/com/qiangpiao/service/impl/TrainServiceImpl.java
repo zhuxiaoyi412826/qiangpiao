@@ -46,6 +46,7 @@ public class TrainServiceImpl implements TrainService {
 
     private final TrainMapper trainMapper;
     private final TrainStockMapper trainStockMapper;
+    private final com.qiangpiao.mapper.TrainStopMapper trainStopMapper;
     private final SeatService seatService;
     private final MultiLevelCacheService cacheService;
     private final StringRedisTemplate stringRedisTemplate;
@@ -147,6 +148,12 @@ public class TrainServiceImpl implements TrainService {
     }
 
     @Override
+    public List<com.qiangpiao.dataobject.TrainStopDO> passingStops(String stationName, LocalDate departDate) {
+        LocalDate date = departDate == null ? LocalDate.now() : departDate;
+        return trainStopMapper.listByStationAndDate(stationName, date);
+    }
+
+    @Override
     public int rollExpiredTrains() {
         LocalDate today = LocalDate.now();
         int rows = trainMapper.rollExpiredTrains(today);
@@ -178,7 +185,7 @@ public class TrainServiceImpl implements TrainService {
                         : seatService.seatMap(trainId, stock.getSeatType(), range));
             }
         }
-        TrainVO trainVO = toVO(trainBO, segmentAvailable(trainBO, fromStation, toStation));
+        TrainVO trainVO = toVO(trainBO, segmentAvailable(trainBO, range), segmentFare(trainBO, range));
         TrainDetailVO detail = new TrainDetailVO();
         org.springframework.beans.BeanUtils.copyProperties(trainVO, detail);
         detail.setSeatMaps(seatMaps);
@@ -236,8 +243,9 @@ public class TrainServiceImpl implements TrainService {
         List<TrainVO> list = trains.stream()
                 .map(train -> {
                     TrainBO bo = loadTrainBO(train.getId());
-                    // 余票按「本次查询的乘车区间」算：同座位分段售卖后，不同区间余票不同
-                    return toVO(bo, segmentAvailable(bo, from, to));
+                    // 余票与票价都按「本次查询的乘车区间」算：同座位分段售卖后，不同区间余票 / 票价都不同
+                    RangeBO range = rangeOf(bo, from, to);
+                    return toVO(bo, segmentAvailable(bo, range), segmentFare(bo, range));
                 })
                 .collect(Collectors.toList());
         return PageResult.of(pageNum, pageSize, total, list);
@@ -248,13 +256,17 @@ public class TrainServiceImpl implements TrainService {
      * 区间能力未开启 / 该区间无段数据时返回空 Map（调用方沿用全程库存，不污染缓存里的 BO）。
      */
     private java.util.Map<Integer, Integer> segmentAvailable(TrainBO bo, String from, String to) {
+        return segmentAvailable(bo, rangeOf(bo, from, to));
+    }
+
+    /**
+     * 按乘车区间算各席别余票：区间余票 = 该区间覆盖的每一段余票的最小值。
+     * 区间能力未开启 / 该区间无段数据时返回空 Map（调用方沿用全程库存，不污染缓存里的 BO）。
+     */
+    private java.util.Map<Integer, Integer> segmentAvailable(TrainBO bo, RangeBO range) {
         java.util.Map<Integer, Integer> result = new java.util.HashMap<>();
-        if (bo == null || bo.getStocks() == null || bo.getStocks().isEmpty()
-                || !segmentStockService.enabled()) {
-            return result;
-        }
-        RangeBO range = segmentStockService.resolveRange(bo.getId(), from, to);
-        if (range == null || range.getFromOrder() == null || range.getToOrder() == null) {
+        if (bo == null || bo.getStocks() == null || bo.getStocks().isEmpty() || range == null
+                || range.getFromOrder() == null || range.getToOrder() == null) {
             return result;
         }
         for (TrainStockBO stock : bo.getStocks()) {
@@ -264,6 +276,33 @@ public class TrainServiceImpl implements TrainService {
             }
         }
         return result;
+    }
+
+    /**
+     * 按乘车区间算各席别票价（分段计价）：区间价 = 覆盖各段段价之和。
+     * 区间能力未开启时返回空 Map（调用方沿用席别全程价）。
+     */
+    private java.util.Map<Integer, java.math.BigDecimal> segmentFare(TrainBO bo, RangeBO range) {
+        java.util.Map<Integer, java.math.BigDecimal> result = new java.util.HashMap<>();
+        if (bo == null || bo.getStocks() == null || bo.getStocks().isEmpty() || range == null) {
+            return result;
+        }
+        for (TrainStockBO stock : bo.getStocks()) {
+            java.math.BigDecimal fare = segmentStockService.fare(bo.getId(), stock.getSeatType(), range,
+                    stock.getPrice());
+            if (fare != null) {
+                result.put(stock.getSeatType(), fare);
+            }
+        }
+        return result;
+    }
+
+    /** 解析乘车区间；区间能力未开启或车次为空时返回 null（调用方按全程票处理） */
+    private RangeBO rangeOf(TrainBO bo, String from, String to) {
+        if (bo == null || !segmentStockService.enabled()) {
+            return null;
+        }
+        return segmentStockService.resolveRange(bo.getId(), from, to);
     }
 
     private TrainBO loadTrainBO(Long trainId) {
@@ -321,18 +360,25 @@ public class TrainServiceImpl implements TrainService {
     }
 
     private TrainVO toVO(TrainBO bo) {
-        return toVO(bo, java.util.Collections.emptyMap());
+        return toVO(bo, java.util.Collections.emptyMap(), java.util.Collections.emptyMap());
+    }
+
+    private TrainVO toVO(TrainBO bo, java.util.Map<Integer, Integer> segAvailable) {
+        return toVO(bo, segAvailable, java.util.Collections.emptyMap());
     }
 
     /**
      * @param segAvailable 乘车区间余票（席别 -> 余票）；为空的席别沿用全程库存
+     * @param segFare      乘车区间票价（席别 -> 区间价）；为空的席别沿用席别全程价
      */
-    private TrainVO toVO(TrainBO bo, java.util.Map<Integer, Integer> segAvailable) {
+    private TrainVO toVO(TrainBO bo, java.util.Map<Integer, Integer> segAvailable,
+                         java.util.Map<Integer, java.math.BigDecimal> segFare) {
         List<TrainStockVO> stockVOs = bo.getStocks() == null ? new ArrayList<>() : bo.getStocks().stream()
                 .map(stock -> TrainStockVO.builder()
                         .seatType(stock.getSeatType())
                         .seatTypeName(stock.getSeatTypeName())
-                        .price(stock.getPrice())
+                        // 展示价必须等于实收价：区间票只坐一段却按全程价展示，等于误导用户
+                        .price(segFare.getOrDefault(stock.getSeatType(), stock.getPrice()))
                         .availableCount(segAvailable.getOrDefault(stock.getSeatType(),
                                 stock.getAvailableCount()))
                         .totalCount(stock.getTotalCount())

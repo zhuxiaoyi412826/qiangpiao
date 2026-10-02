@@ -38,4 +38,18 @@
           AND version = #{version}
           AND balance &gt;= #{amount}
     </update>
+
+    <!-- 资金对账：分页扫全量钱包，逐个核对「余额 == 流水累计」 -->
+    <select id="selectPage" resultType="com.qiangpiao.dataobject.WalletDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_wallet
+        ORDER BY user_id
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countAll" resultType="long">
+        SELECT COUNT(1)
+        FROM t_wallet
+    </select>
 </mapper>

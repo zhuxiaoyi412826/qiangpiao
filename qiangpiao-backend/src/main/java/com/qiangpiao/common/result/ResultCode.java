@@ -116,7 +116,15 @@ public enum ResultCode {
     WALLET_BALANCE_NOT_ENOUGH(5002, "余额不足，请到个人中心 - 我的钱包充值"),
     WALLET_AMOUNT_INVALID(5003, "金额不合法"),
     WALLET_RECHARGE_LIMIT(5004, "单笔充值金额不能超过 50000 元"),
-    WALLET_OPERATE_FAILED(5005, "钱包扣款失败，请稍后重试");
+    WALLET_OPERATE_FAILED(5005, "钱包扣款失败，请稍后重试"),
+
+    /* ========== 资金对账 6000+ ========== */
+    /** 对账单据不存在 */
+    RECON_BILL_NOT_FOUND(6001, "对账单据不存在"),
+    /** 只有「待审核」的单据能被审核，重复审核 / 审核已处理的单据会撞这个 */
+    RECON_BILL_STATUS_ERROR(6002, "单据状态不正确，只有待审核的单据可以处理"),
+    /** 审核通过但退补账执行失败（如用户余额不足，补扣失败） */
+    RECON_HANDLE_FAILED(6003, "退补账执行失败，请查看日志或稍后重试");
 
     private final int code;
     private final String message;

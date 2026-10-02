@@ -37,4 +37,29 @@
         VALUES (#{flowNo}, #{userId}, #{bizNo}, #{type}, #{title}, #{detail}, #{amount}, #{balance}, #{remark},
                 #{idempotentKey}, NOW())
     </insert>
+
+    <!-- 资金对账：同一业务单号下的全部流水（漏记 / 重复记账都靠它发现） -->
+    <select id="selectByBizNo" resultType="com.qiangpiao.dataobject.WalletFlowDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_wallet_flow
+        WHERE biz_no = #{bizNo}
+        ORDER BY id
+    </select>
+
+    <!-- 资金对账：某用户的流水累计，应与 t_wallet.balance 完全相等（流水是余额变动的唯一来源） -->
+    <select id="sumAmountByUserId" resultType="java.math.BigDecimal">
+        SELECT IFNULL(SUM(amount), 0)
+        FROM t_wallet_flow
+        WHERE user_id = #{userId}
+    </select>
+
+    <select id="sumAmountByType" resultType="java.math.BigDecimal">
+        SELECT IFNULL(SUM(amount), 0)
+        FROM t_wallet_flow
+        WHERE type = #{type}
+        <if test="excludeUserId != null">
+            AND user_id &lt;&gt; #{excludeUserId}
+        </if>
+    </select>
 </mapper>

@@ -17,7 +17,7 @@ import java.util.List;
 /**
  * 日期班次生成实现：以「每个车次号最早一天的记录」为模板，复制出未来每天的实际班次。
  * <p>
- * 复制内容：车次基本信息（不含日期）+ 各席别库存（余量重置为总量）+ 座位图（全部重置为可售）。
+ * 复制内容：车次基本信息（不含日期）+ 各席别库存（余量重置为总量）+ 座位图（全部重置为可售）+ 时刻表（经停站）。
  * 幂等依赖唯一键 uk_train_no_date，已存在该日期班次时直接跳过。
  */
 @Slf4j
@@ -85,6 +85,8 @@ public class TrainScheduleServiceImpl implements TrainScheduleService {
         Long newTrainId = adminMapper.lastInsertId();
         adminMapper.copyStock(templateTrainId, newTrainId);
         adminMapper.copySeats(templateTrainId, newTrainId);
+        // 时刻表必须一起复制：没有经停站，中转方案建不出图，区间票也会退化成全程票
+        adminMapper.copyStops(templateTrainId, newTrainId);
         return newTrainId;
     }
 }

@@ -111,6 +111,16 @@ public interface AdminMapper {
             " #{arriveTime}, #{departTime}, #{stopMinutes}, #{distanceKm})")
     int insertStop(TrainStopDO stop);
 
+    /**
+     * 复制时刻表到新生成的每日班次。
+     * 少了这一步，新班次就没有经停站数据：中转方案建不出图、区间票也全退化成全程票。
+     */
+    @Insert("INSERT INTO t_train_stop (train_id, station_id, station_name, stop_order, arrive_time, depart_time," +
+            " stop_minutes, distance_km)" +
+            " SELECT #{toTrainId}, station_id, station_name, stop_order, arrive_time, depart_time," +
+            " stop_minutes, distance_km FROM t_train_stop WHERE train_id = #{fromTrainId}")
+    int copyStops(@Param("fromTrainId") Long fromTrainId, @Param("toTrainId") Long toTrainId);
+
     @Select("SELECT id, train_id, carriage_no, seat_type, seat_count, create_time FROM t_carriage" +
             " WHERE train_id = #{trainId} ORDER BY carriage_no")
     List<CarriageDO> listCarriages(Long trainId);

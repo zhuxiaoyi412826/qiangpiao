@@ -1,5 +1,6 @@
 package com.qiangpiao.service;
 
+import com.qiangpiao.bo.SeckillTaskBO;
 import com.qiangpiao.dto.SeckillDTO;
 import com.qiangpiao.vo.SeckillBatchResultVO;
 import com.qiangpiao.vo.SeckillResultVO;
@@ -46,4 +47,18 @@ public interface SeckillService {
      * 回滚 Redis 库存（下单失败 / 取消订单补偿）
      */
     void rollbackStock(Long trainId, Integer seatType);
+
+    /**
+     * 处理一条下单任务（Redis Stream 消费者调用）。
+     * <p>
+     * 业务上注定失败的情况（限购 / 库存不足 / 重复下单）内部已补偿回滚，正常返回；
+     * 系统抖动（DB 超时等）抛 SeckillTaskRetryException，由队列保留 pending 等待重投。
+     */
+    void processTask(SeckillTaskBO taskBO);
+
+    /**
+     * 终结一条任务：补偿回滚 Redis 库存与购票额度，并把该票标记为失败。
+     * 用于任务重试次数耗尽时（消费者侧调用），保证「扣了库存却没成单」的状态一定被回收。
+     */
+    void abandon(SeckillTaskBO taskBO, String reason);
 }

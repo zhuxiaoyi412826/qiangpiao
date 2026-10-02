@@ -96,4 +96,15 @@
             notify_time  = NOW()
         WHERE pay_no = #{payNo}
     </update>
+
+    <!-- 资金对账：时间窗口内支付成功的支付单，逐笔核对订单状态与钱包消费流水 -->
+    <select id="selectSuccessBetween" resultType="com.qiangpiao.dataobject.PaymentDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_payment
+        WHERE status = 1
+        AND pay_time &gt;= #{from}
+        AND pay_time &lt; #{to}
+        ORDER BY pay_time
+    </select>
 </mapper>

@@ -55,6 +55,13 @@ public interface TrainMapper {
 
     long countAll();
 
+    /**
+     * 库存对账专用：只取未发车的在售班次（已发车班次余票不再变动，对账它们没有意义）。
+     */
+    List<TrainDO> selectNotDeparted(@Param("offset") Long offset, @Param("limit") Long limit);
+
+    long countNotDeparted();
+
     int insert(TrainDO train);
 
     /**

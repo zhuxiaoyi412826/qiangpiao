@@ -13,6 +13,7 @@ import com.qiangpiao.dataobject.OrderLogDO;
 import com.qiangpiao.dataobject.SeatDO;
 import com.qiangpiao.dataobject.StationDO;
 import com.qiangpiao.dataobject.TrainDO;
+import com.qiangpiao.dataobject.TrainSegmentStockDO;
 import com.qiangpiao.dataobject.TrainStopDO;
 import com.qiangpiao.dataobject.UserDO;
 import com.qiangpiao.dto.AdminOrderQueryDTO;
@@ -226,6 +227,26 @@ public class AdminController {
     @ApiOperation("初始化车次的区间库存（相邻站单段，并把段余票预热到 Redis）")
     public R<Integer> initSegmentStock(@PathVariable Long id) {
         return R.ok(segmentStockService.initSegments(id));
+    }
+
+    @GetMapping("/trains/{id}/segments")
+    @ApiOperation("车次的区间库存与段价：段价之和即该区间票价")
+    public R<List<TrainSegmentStockDO>> listSegments(@PathVariable Long id) {
+        return R.ok(segmentStockService.listSegments(id));
+    }
+
+    @PostMapping("/trains/{id}/segment/price")
+    @ApiOperation("维护区间段价：body = [{seatType, segIndex, price}]，price 传 null 表示清空后按里程自动折算")
+    public R<Integer> updateSegmentPrice(@PathVariable Long id,
+                                         @RequestBody List<TrainSegmentStockDO> segments) {
+        int rows = 0;
+        for (TrainSegmentStockDO seg : segments) {
+            if (seg == null || seg.getSeatType() == null || seg.getSegIndex() == null) {
+                continue;
+            }
+            rows += segmentStockService.updateSegmentPrice(id, seg.getSeatType(), seg.getSegIndex(), seg.getPrice());
+        }
+        return R.ok(rows);
     }
 
     private java.time.LocalDateTime parseTime(String text) {

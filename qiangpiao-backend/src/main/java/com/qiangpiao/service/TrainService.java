@@ -63,4 +63,13 @@ public interface TrainService {
      * 车次时刻表（站点时序）：按停靠顺序返回途经站及到发时刻。
      */
     java.util.List<com.qiangpiao.dataobject.TrainStopDO> stops(Long trainId);
+
+    /**
+     * 经停时刻查询（车站大屏视角）：某天有哪些车次经停该站，各自几点到、几点开。
+     *
+     * @param stationName 车站名
+     * @param departDate  发车日期，为空表示今天
+     */
+    java.util.List<com.qiangpiao.dataobject.TrainStopDO> passingStops(String stationName,
+                                                                     java.time.LocalDate departDate);
 }

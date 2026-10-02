@@ -2,13 +2,18 @@ package com.qiangpiao.controller;
 
 import com.qiangpiao.common.result.PageResult;
 import com.qiangpiao.common.result.R;
+import com.qiangpiao.dataobject.TrainStopDO;
+import com.qiangpiao.dto.RoutePlanQueryDTO;
 import com.qiangpiao.dto.TrainQueryDTO;
+import com.qiangpiao.service.RoutePlanService;
 import com.qiangpiao.service.TrainService;
+import com.qiangpiao.vo.RoutePlanVO;
 import com.qiangpiao.vo.TrainDetailVO;
 import com.qiangpiao.vo.TrainVO;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -17,6 +22,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.validation.Valid;
+import java.time.LocalDate;
+import java.util.List;
 
 /**
  * 车次接口（RESTful）。
@@ -29,6 +36,7 @@ import javax.validation.Valid;
 public class TrainController {
 
     private final TrainService trainService;
+    private final RoutePlanService routePlanService;
 
     @GetMapping
     @ApiOperation("分页查询车次")
@@ -56,7 +64,21 @@ public class TrainController {
 
     @GetMapping("/{trainId}/stops")
     @ApiOperation("车次时刻表（站点时序）：按停靠顺序返回到发时刻")
-    public R<java.util.List<com.qiangpiao.dataobject.TrainStopDO>> stops(@PathVariable Long trainId) {
+    public R<List<TrainStopDO>> stops(@PathVariable Long trainId) {
         return R.ok(trainService.stops(trainId));
+    }
+
+    @GetMapping("/stops/passing")
+    @ApiOperation("经停时刻查询（车站大屏）：某天经停该站的全部车次及到发时刻")
+    public R<List<TrainStopDO>> passing(@RequestParam String station,
+                                        @RequestParam(required = false)
+                                        @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate date) {
+        return R.ok(trainService.passingStops(station, date));
+    }
+
+    @GetMapping("/routes")
+    @ApiOperation("中转方案推荐：直达 + 换乘一起算，支持最短耗时 / 最省钱 / 最少换乘")
+    public R<List<RoutePlanVO>> routes(@Valid RoutePlanQueryDTO query) {
+        return R.ok(routePlanService.plan(query));
     }
 }

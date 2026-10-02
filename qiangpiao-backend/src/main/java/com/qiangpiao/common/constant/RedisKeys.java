@@ -146,4 +146,19 @@ public final class RedisKeys {
     public static String userTokens(Long userId) {
         return Constants.USER_TOKEN_KEY + userId;
     }
+
+    /** 秒杀下单任务队列（Redis Stream）：可靠异步落库，进程重启不丢任务 */
+    public static String seckillTaskStream() {
+        return Constants.SECKILL_TASK_STREAM_KEY;
+    }
+
+    /** 任务终结标记：排队计数只回退一次（重复投递 / 重试不再重复减） */
+    public static String seckillTaskDone(String orderNo) {
+        return Constants.SECKILL_TASK_DONE_KEY + orderNo;
+    }
+
+    /** 库存漂移观察计数（trainId + seatType + 维度）：连续命中阈值次才自动校准 */
+    public static String stockDrift(Long trainId, Integer seatType, String dimension) {
+        return Constants.STOCK_DRIFT_KEY + trainId + ":" + seatType + ":" + dimension;
+    }
 }

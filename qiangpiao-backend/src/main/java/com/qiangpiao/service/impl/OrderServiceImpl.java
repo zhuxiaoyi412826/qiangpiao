@@ -286,7 +286,9 @@ public class OrderServiceImpl implements OrderService {
         order.setPassengerName(taskBO.getPassengerName());
         // 身份证明文进，密文落库
         order.setIdCard(idCardCipher);
-        order.setPrice(stock.getPrice());
+        // 分段计价：区间票按「覆盖各段的段价之和」收费；段价未维护时按里程比例折算，都缺才退回全程价
+        order.setPrice(segmentStockService.fare(taskBO.getTrainId(), taskBO.getSeatType(), range,
+                stock.getPrice()));
         // 乘车日期快照：后续车次日期滚动时，已生成订单的乘车日期保持不变
         order.setDepartDate(trainBO.getDepartDate());
         // 最初购票车次的开车时间：改签后不更新，退票费率按这个时间取档

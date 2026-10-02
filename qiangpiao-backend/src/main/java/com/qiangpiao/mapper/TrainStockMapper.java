@@ -36,5 +36,12 @@ public interface TrainStockMapper {
 
     int updateById(TrainStockDO stock);
 
+    /**
+     * 库存对账专用：只把余票改成给定值，不动总座位数与票价。
+     * 不用 updateById，避免对账时误改 total_count / price。
+     */
+    int updateAvailableCount(@Param("trainId") Long trainId, @Param("seatType") Integer seatType,
+                            @Param("availableCount") Integer availableCount);
+
     int insert(TrainStockDO stock);
 }

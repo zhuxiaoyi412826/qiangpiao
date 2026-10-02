@@ -3,6 +3,8 @@ package com.qiangpiao.dataobject;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
+import java.math.BigDecimal;
+
 /**
  * 区间库存 DO（对应 t_train_segment_stock）。
  * <p>
@@ -20,5 +22,7 @@ public class TrainSegmentStockDO extends BaseDO {
     private Integer segIndex;
     private Integer totalCount;
     private Integer availableCount;
+    /** 该段票价（第 i 站 → 第 i+1 站）；NULL 表示未单独定价，取价时按里程比例折算全程价 */
+    private BigDecimal price;
     private Integer version;
 }

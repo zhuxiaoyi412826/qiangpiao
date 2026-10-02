@@ -4,6 +4,7 @@ import com.qiangpiao.dataobject.WalletDO;
 import org.apache.ibatis.annotations.Param;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * 钱包 Mapper（SQL 见 resources/mapper/WalletMapper.xml）。
@@ -28,4 +29,10 @@ public interface WalletMapper {
     int decreaseBalance(@Param("userId") Long userId,
                         @Param("amount") BigDecimal amount,
                         @Param("version") Integer version);
+
+    /** 资金对账专用：分页扫全量钱包（校验余额与流水累计是否一致） */
+    List<WalletDO> selectPage(@Param("offset") long offset, @Param("limit") long limit);
+
+    /** 资金对账专用：钱包总数 */
+    long countAll();
 }

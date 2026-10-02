@@ -4,6 +4,7 @@ import com.qiangpiao.dataobject.PaymentDO;
 import org.apache.ibatis.annotations.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -39,4 +40,9 @@ public interface PaymentMapper {
 
     /** 回调计数 +1（重复回调也要计数，便于排查渠道重发） */
     int increaseNotifyCount(@Param("payNo") String payNo);
+
+    /**
+     * 资金对账专用：扫描时间窗口内「支付成功」的支付单（按支付成功时间，走 idx_status_expire）。
+     */
+    List<PaymentDO> selectSuccessBetween(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
 }

@@ -53,4 +53,12 @@ public interface OrderMapper {
                                                   @Param("start") LocalDateTime start,
                                                   @Param("end") LocalDateTime end,
                                                   @Param("excludeTrainId") Long excludeTrainId);
+
+    /**
+     * 资金对账专用：扫描时间窗口内发生过状态变更、且处于指定状态的订单。
+     * 用 update_time 而不是 create_time——对账关心的是「刚刚发生过什么」，老订单无需反复扫。
+     */
+    List<OrderDO> selectReconOrders(@Param("statuses") List<Integer> statuses,
+                                    @Param("from") LocalDateTime from,
+                                    @Param("to") LocalDateTime to);
 }

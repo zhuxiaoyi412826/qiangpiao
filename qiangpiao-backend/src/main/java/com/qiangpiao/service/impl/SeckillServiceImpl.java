@@ -8,6 +8,7 @@ import com.qiangpiao.bo.TrainBO;
 import com.qiangpiao.common.constant.OrderAction;
 import com.qiangpiao.common.constant.RedisKeys;
 import com.qiangpiao.common.exception.BizException;
+import com.qiangpiao.common.exception.SeckillTaskRetryException;
 import com.qiangpiao.common.result.ResultCode;
 import com.qiangpiao.common.util.SensitiveCrypto;
 import com.qiangpiao.common.util.OrderNoGenerator;
@@ -18,6 +19,7 @@ import com.qiangpiao.dataobject.TrainDO;
 import com.qiangpiao.dataobject.TrainStockDO;
 import com.qiangpiao.dto.PassengerItemDTO;
 import com.qiangpiao.dto.SeckillDTO;
+import com.qiangpiao.mapper.OrderMapper;
 import com.qiangpiao.mapper.SeckillRecordMapper;
 import com.qiangpiao.mapper.TrainMapper;
 import com.qiangpiao.mapper.TrainStockMapper;
@@ -33,6 +35,7 @@ import com.qiangpiao.service.SeckillService;
 import com.qiangpiao.service.SeckillSseService;
 import com.qiangpiao.service.SegmentStockService;
 import com.qiangpiao.service.TrainService;
+import com.qiangpiao.task.SeckillTaskQueue;
 import com.qiangpiao.vo.SeckillBatchResultVO;
 import com.qiangpiao.vo.SeckillFlowVO;
 import com.qiangpiao.vo.SeckillPushVO;
@@ -104,6 +107,9 @@ public class SeckillServiceImpl implements SeckillService {
     private final CaptchaService captchaService;
     private final SegmentStockService segmentStockService;
     private final SeckillSseService seckillSseService;
+    /** 可靠任务队列（Redis Stream）：下单任务持久化，进程重启不丢 */
+    private final SeckillTaskQueue taskQueue;
+    private final OrderMapper orderMapper;
 
     @Qualifier("seckillExecutor")
     private final Executor seckillExecutor;
@@ -111,6 +117,10 @@ public class SeckillServiceImpl implements SeckillService {
     /** 抢票是否强制人机验证（true = 每次抢票都要先过验证码） */
     @Value("${seckill.captcha-enabled:true}")
     private boolean captchaEnabled;
+
+    /** true = 下单任务写 Redis Stream；false = 退回内存线程池（宕机会丢任务，仅作降级） */
+    @Value("${seckill.task-queue-enabled:true}")
+    private boolean taskQueueEnabled;
 
     @Override
     public SeckillResultVO seckill(Long userId, SeckillDTO seckillDTO, String ip) {
@@ -269,7 +279,7 @@ public class SeckillServiceImpl implements SeckillService {
             flow.setClientIp(ip);
             flow.setStatus(SeckillFlowVO.STATUS_QUEUEING);
             seckillFlowService.accept(flow);
-            seckillExecutor.execute(() -> asyncCreateOrder(taskBO));
+            dispatch(taskBO);
         }
         stringRedisTemplate.opsForValue().set(RedisKeys.seckillBatch(batchNo), String.join(",", orderNos),
                 RESULT_MINUTES, TimeUnit.MINUTES);
@@ -531,59 +541,138 @@ public class SeckillServiceImpl implements SeckillService {
     // ==================== private ====================
 
     /**
-     * 异步落库：失败则补偿（回滚 Redis 库存 + 清理标记）
+     * 投递下单任务：优先写 Redis Stream（持久化，进程重启/宕机不丢）；
+     * Redis 不可用或开关关闭时降级回内存线程池（此时仍是旧语义：进程挂了任务会丢）。
      */
-    private void asyncCreateOrder(SeckillTaskBO taskBO) {
+    private void dispatch(SeckillTaskBO taskBO) {
+        if (taskQueueEnabled) {
+            try {
+                String messageId = taskQueue.enqueue(taskBO);
+                if (messageId != null) {
+                    return;
+                }
+            } catch (Exception e) {
+                log.error("投递秒杀任务到 Redis 失败，降级为内存线程池：orderNo={}, msg={}",
+                        taskBO.getOrderNo(), e.getMessage());
+            }
+        }
+        seckillExecutor.execute(() -> {
+            try {
+                processTask(taskBO);
+            } catch (SeckillTaskRetryException e) {
+                // 内存模式没有重投机制：直接终结，避免「库存已扣、订单未落」的悬空状态
+                abandon(taskBO, "下单失败：" + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * 处理一条下单任务（队列消费者 / 内存线程池共用）。
+     * <p>
+     * 抛 {@link SeckillTaskRetryException} 表示系统抖动，等待队列重投（不确认消息）；
+     * 业务失败（限购 / 库存不足 / 重复下单）内部已补偿回滚，正常返回。
+     */
+    @Override
+    public void processTask(SeckillTaskBO taskBO) {
         long start = System.currentTimeMillis();
         try {
-            // 同批次优先坐一起：本批次已有票落位时，跟着坐那个车厢（坐不下会自动改分其它车厢）
-            if (taskBO.getBatchNo() != null && taskBO.getPreferCarriageNo() == null) {
-                String carriage = stringRedisTemplate.opsForValue()
-                        .get(RedisKeys.seckillBatchCarriage(taskBO.getBatchNo()));
-                if (StringUtils.hasText(carriage)) {
-                    try {
-                        taskBO.setPreferCarriageNo(Integer.valueOf(carriage.trim()));
-                    } catch (NumberFormatException ignored) {
-                        // 脏数据忽略，退化成自动分配
-                    }
-                }
+            // 幂等：任务可能被重投（进程崩溃 / XCLAIM），订单已落库就按成功处理。
+            // 少了这一步，重复消费会再走一次补偿，把库存多退一张。
+            OrderDO exist = orderMapper.selectByOrderNo(taskBO.getOrderNo());
+            if (exist != null) {
+                log.warn("下单任务重复投递，订单已存在，按成功处理：orderNo={}", taskBO.getOrderNo());
+                markSuccess(taskBO, exist, System.currentTimeMillis() - start);
+                return;
             }
-            OrderDO order = orderService.createSeckillOrder(taskBO);
-            // 第一张落位的车厢写入批次，供同批次后续票参考
-            if (taskBO.getBatchNo() != null && order.getCarriageNo() != null) {
-                String carriageKey = RedisKeys.seckillBatchCarriage(taskBO.getBatchNo());
-                if (Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
-                        .setIfAbsent(carriageKey, String.valueOf(order.getCarriageNo())))) {
-                    stringRedisTemplate.expire(carriageKey, RESULT_MINUTES, TimeUnit.MINUTES);
-                }
-            }
-            // 成功：写入批次内该票的结果（车厢 + 座位）
-            stringRedisTemplate.opsForValue().set(RedisKeys.seckillTicket(taskBO.getOrderNo()),
-                    "1|" + order.getPassengerName() + "|" + order.getCarriageNo() + "|" + order.getSeatNo() + "|",
-                    RESULT_MINUTES, TimeUnit.MINUTES);
-            seckillFlowService.finish(taskBO.getOrderNo(), SeckillFlowVO.STATUS_SUCCESS, null,
-                    System.currentTimeMillis() - start);
-            // SSE 主动推送，前端不必等下一轮轮询
-            pushResult(taskBO, 1, order.getCarriageNo(), order.getSeatNo(), "抢票成功");
-        } catch (Exception e) {
+            markSuccess(taskBO, createOrderInternal(taskBO), System.currentTimeMillis() - start);
+        } catch (BizException e) {
             String reason = ResultCode.SECKILL_FAILED.getMessage();
-            if (e instanceof BizException && e.getMessage() != null && !e.getMessage().isEmpty()) {
+            if (e.getMessage() != null && !e.getMessage().isEmpty()) {
                 reason = e.getMessage();
             }
-            log.error("异步创建秒杀订单失败，执行补偿：orderNo={}, msg={}",
+            terminate(taskBO, reason, start);
+        } catch (Exception e) {
+            log.error("下单任务处理异常，保留 pending 等待重投：orderNo={}, msg={}",
                     taskBO.getOrderNo(), e.getMessage());
-            // 抢票失败也要留痕：订单没落库时，这条日志是用户能查到的唯一凭证
-            orderLogService.logAsync(taskBO.getOrderNo(), OrderAction.SECKILL_FAIL,
-                    "抢票失败：" + reason + "，Redis 库存与购票额度已回滚，可重新抢票",
-                    String.valueOf(taskBO.getUserId()));
-            seckillFlowService.finish(taskBO.getOrderNo(), SeckillFlowVO.STATUS_FAILED, reason,
-                    System.currentTimeMillis() - start);
-            compensate(taskBO, reason);
-            pushResult(taskBO, -1, null, null, reason);
+            throw new SeckillTaskRetryException(e);
         } finally {
-            // 无论成功失败，该票都已出队，排队计数回退
-            incrQueue(RedisKeys.seckillQueuePending(taskBO.getTrainId(), taskBO.getSeatType()), -1);
             log.info("异步下单耗时：{} ms, orderNo={}", System.currentTimeMillis() - start, taskBO.getOrderNo());
+        }
+    }
+
+    /**
+     * 终结一条任务：补偿回滚 Redis 库存与购票额度，标记该票失败。
+     * 业务失败和「重试次数耗尽」都走这里，保证扣掉的库存一定能收回来。
+     */
+    @Override
+    public void abandon(SeckillTaskBO taskBO, String reason) {
+        terminate(taskBO, reason, System.currentTimeMillis());
+    }
+
+    /** 落库主流程（原 asyncCreateOrder 的成功路径） */
+    private OrderDO createOrderInternal(SeckillTaskBO taskBO) {
+        // 同批次优先坐一起：本批次已有票落位时，跟着坐那个车厢（坐不下会自动改分其它车厢）
+        if (taskBO.getBatchNo() != null && taskBO.getPreferCarriageNo() == null) {
+            String carriage = stringRedisTemplate.opsForValue()
+                    .get(RedisKeys.seckillBatchCarriage(taskBO.getBatchNo()));
+            if (StringUtils.hasText(carriage)) {
+                try {
+                    taskBO.setPreferCarriageNo(Integer.valueOf(carriage.trim()));
+                } catch (NumberFormatException ignored) {
+                    // 脏数据忽略，退化成自动分配
+                }
+            }
+        }
+        OrderDO order = orderService.createSeckillOrder(taskBO);
+        // 第一张落位的车厢写入批次，供同批次后续票参考
+        if (taskBO.getBatchNo() != null && order.getCarriageNo() != null) {
+            String carriageKey = RedisKeys.seckillBatchCarriage(taskBO.getBatchNo());
+            if (Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
+                    .setIfAbsent(carriageKey, String.valueOf(order.getCarriageNo())))) {
+                stringRedisTemplate.expire(carriageKey, RESULT_MINUTES, TimeUnit.MINUTES);
+            }
+        }
+        return order;
+    }
+
+    /** 成功收尾：写票结果 + 流水 + SSE + 排队计数回退 */
+    private void markSuccess(SeckillTaskBO taskBO, OrderDO order, long costMs) {
+        stringRedisTemplate.opsForValue().set(RedisKeys.seckillTicket(taskBO.getOrderNo()),
+                "1|" + order.getPassengerName() + "|" + order.getCarriageNo() + "|" + order.getSeatNo() + "|",
+                RESULT_MINUTES, TimeUnit.MINUTES);
+        seckillFlowService.finish(taskBO.getOrderNo(), SeckillFlowVO.STATUS_SUCCESS, null, costMs);
+        // SSE 主动推送，前端不必等下一轮轮询
+        pushResult(taskBO, 1, order.getCarriageNo(), order.getSeatNo(), "抢票成功");
+        onceDecrQueue(taskBO);
+    }
+
+    /** 失败收尾：留痕 + 补偿 + 标记失败 + 排队计数回退 */
+    private void terminate(SeckillTaskBO taskBO, String reason, long start) {
+        log.error("异步创建秒杀订单失败，执行补偿：orderNo={}, msg={}", taskBO.getOrderNo(), reason);
+        // 抢票失败也要留痕：订单没落库时，这条日志是用户能查到的唯一凭证
+        orderLogService.logAsync(taskBO.getOrderNo(), OrderAction.SECKILL_FAIL,
+                "抢票失败：" + reason + "，Redis 库存与购票额度已回滚，可重新抢票",
+                String.valueOf(taskBO.getUserId()));
+        seckillFlowService.finish(taskBO.getOrderNo(), SeckillFlowVO.STATUS_FAILED, reason,
+                System.currentTimeMillis() - start);
+        compensate(taskBO, reason);
+        pushResult(taskBO, -1, null, null, reason);
+        onceDecrQueue(taskBO);
+    }
+
+    /**
+     * 排队计数回退：同一订单只回退一次。
+     * 任务重投 / 重复投递时若再减，「前面还有几张」会被算成负数。
+     */
+    private void onceDecrQueue(SeckillTaskBO taskBO) {
+        try {
+            Boolean first = stringRedisTemplate.opsForValue().setIfAbsent(
+                    RedisKeys.seckillTaskDone(taskBO.getOrderNo()), "1", 2, TimeUnit.HOURS);
+            if (Boolean.TRUE.equals(first)) {
+                incrQueue(RedisKeys.seckillQueuePending(taskBO.getTrainId(), taskBO.getSeatType()), -1);
+            }
+        } catch (Exception e) {
+            log.warn("排队计数回退失败（不影响下单）：orderNo={}, msg={}", taskBO.getOrderNo(), e.getMessage());
         }
     }
 

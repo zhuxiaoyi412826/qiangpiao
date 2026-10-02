@@ -129,6 +129,81 @@ public final class Constants {
     /** 新用户注册礼包：业务单号前缀 */
     public static final String WALLET_GIFT_BIZ_NO_PREFIX = "INIT";
 
+    /* ========== 秒杀下单任务队列（Redis Stream） ========== */
+    /** 任务流 key：XADD / XREADGROUP / XACK 都用它 */
+    public static final String SECKILL_TASK_STREAM_KEY = "qp:seckill:task:stream";
+    /** 消费组名 */
+    public static final String SECKILL_TASK_GROUP = "qp-seckill-order";
+    /** 任务终结标记前缀（防重复回退排队计数） */
+    public static final String SECKILL_TASK_DONE_KEY = "qp:seckill:task:done:";
+
+    /* ========== 库存对账 ========== */
+    /** 库存漂移观察计数前缀：同一处漂移连续命中 N 次才自动校准，避免把「在途瞬间差」误当漂移修掉 */
+    public static final String STOCK_DRIFT_KEY = "qp:stock:drift:";
+
+    /* ========== 资金对账（t_recon_bill） ========== */
+    /** 单据状态：待审核（等待后台人员处理） */
+    public static final int RECON_STATUS_PENDING = 0;
+    /** 单据状态：审核通过（已按 handle_action 执行退补账） */
+    public static final int RECON_STATUS_APPROVED = 1;
+    /** 单据状态：已驳回（判定为正常业务，不处理） */
+    public static final int RECON_STATUS_REJECTED = 2;
+    /** 单据状态：已关闭（差异自行恢复：下一轮对账发现已一致） */
+    public static final int RECON_STATUS_CLOSED = 3;
+
+    /** 业务域：支付单 */
+    public static final String RECON_BIZ_PAYMENT = "PAYMENT";
+    /** 业务域：订单 */
+    public static final String RECON_BIZ_ORDER = "ORDER";
+    /** 业务域：退款 / 退票 */
+    public static final String RECON_BIZ_REFUND = "REFUND";
+    /** 业务域：钱包（余额 vs 流水） */
+    public static final String RECON_BIZ_WALLET = "WALLET";
+    /** 业务域：平台收入（资金闭环） */
+    public static final String RECON_BIZ_PLATFORM = "PLATFORM";
+
+    /** 差异：支付单已成功，但没有对应的消费流水（钱没扣 / 流水漏记） */
+    public static final String RECON_DIFF_PAY_NO_FLOW = "PAY_NO_FLOW";
+    /** 差异：支付单金额与消费流水金额不一致 */
+    public static final String RECON_DIFF_PAY_AMOUNT = "PAY_AMOUNT_DIFF";
+    /** 差异：同一订单有多笔消费流水（疑似重复扣款） */
+    public static final String RECON_DIFF_PAY_MULTI_FLOW = "PAY_MULTI_FLOW";
+    /** 差异：订单已支付，但没有成功的支付单 */
+    public static final String RECON_DIFF_ORDER_NO_PAYMENT = "ORDER_NO_PAYMENT";
+    /** 差异：订单已退票，但没有退款流水（用户没收到退款） */
+    public static final String RECON_DIFF_REFUND_NO_FLOW = "REFUND_NO_FLOW";
+    /** 差异：订单退款金额与退款流水金额不一致 */
+    public static final String RECON_DIFF_REFUND_AMOUNT = "REFUND_AMOUNT_DIFF";
+    /** 差异：钱包余额与流水累计不一致（余额快照链断裂） */
+    public static final String RECON_DIFF_WALLET_BALANCE = "WALLET_BALANCE_DIFF";
+    /** 差异：钱包余额为负（透支，不该发生） */
+    public static final String RECON_DIFF_WALLET_NEGATIVE = "WALLET_NEGATIVE";
+    /** 差异：用户消费合计与平台收入合计不一致（平台入账失败被吞的典型表现） */
+    public static final String RECON_DIFF_PLATFORM_INCOME = "PLATFORM_INCOME_DIFF";
+
+    /** 处理动作：仅记录，人工线下处理 */
+    public static final String RECON_ACTION_NONE = "NONE";
+    /** 处理动作：退钱给用户（补退 / 退多扣的部分） */
+    public static final String RECON_ACTION_REFUND_TO_USER = "REFUND_TO_USER";
+    /** 处理动作：向用户补扣（收了票没扣到钱） */
+    public static final String RECON_ACTION_CHARGE_USER = "CHARGE_USER";
+    /** 处理动作：平台账户冲正（按差异正负自动补记收入或冲退） */
+    public static final String RECON_ACTION_FIX_PLATFORM = "FIX_PLATFORM";
+
+    /** 风险等级：低 */
+    public static final int RECON_RISK_LOW = 1;
+    /** 风险等级：中 */
+    public static final int RECON_RISK_MIDDLE = 2;
+    /** 风险等级：高（金额大 / 余额为负 / 重复扣款） */
+    public static final int RECON_RISK_HIGH = 3;
+
+    /** 来源：定时任务扫描发现 */
+    public static final String RECON_SOURCE_JOB = "JOB";
+    /** 来源：后台人工开单 */
+    public static final String RECON_SOURCE_MANUAL = "MANUAL";
+    /** 对账单号前缀 */
+    public static final String RECON_BILL_NO_PREFIX = "RB";
+
     /**
      * 支付单状态文案。
      */
@@ -147,6 +222,77 @@ public final class Constants {
                 return "已关闭";
             default:
                 return "未知";
+        }
+    }
+
+    /**
+     * 对账单据状态文案。
+     */
+    public static String reconStatusText(Integer status) {
+        if (status == null) {
+            return "未知";
+        }
+        switch (status) {
+            case RECON_STATUS_PENDING:
+                return "待审核";
+            case RECON_STATUS_APPROVED:
+                return "审核通过";
+            case RECON_STATUS_REJECTED:
+                return "已驳回";
+            case RECON_STATUS_CLOSED:
+                return "已关闭";
+            default:
+                return "未知";
+        }
+    }
+
+    /**
+     * 对账差异类型文案。
+     */
+    public static String reconDiffTypeText(String diffType) {
+        if (diffType == null) {
+            return "未知";
+        }
+        switch (diffType) {
+            case RECON_DIFF_PAY_NO_FLOW:
+                return "支付成功但无消费流水";
+            case RECON_DIFF_PAY_AMOUNT:
+                return "支付金额与流水不一致";
+            case RECON_DIFF_PAY_MULTI_FLOW:
+                return "同一订单多笔消费流水";
+            case RECON_DIFF_ORDER_NO_PAYMENT:
+                return "订单已支付但无成功支付单";
+            case RECON_DIFF_REFUND_NO_FLOW:
+                return "订单已退票但无退款流水";
+            case RECON_DIFF_REFUND_AMOUNT:
+                return "退款金额与流水不一致";
+            case RECON_DIFF_WALLET_BALANCE:
+                return "钱包余额与流水累计不一致";
+            case RECON_DIFF_WALLET_NEGATIVE:
+                return "钱包余额为负";
+            case RECON_DIFF_PLATFORM_INCOME:
+                return "用户消费与平台收入不一致";
+            default:
+                return diffType;
+        }
+    }
+
+    /**
+     * 对账处理动作文案。
+     */
+    public static String reconActionText(String action) {
+        if (action == null) {
+            return "仅记录";
+        }
+        switch (action) {
+            case RECON_ACTION_REFUND_TO_USER:
+                return "退钱给用户";
+            case RECON_ACTION_CHARGE_USER:
+                return "向用户补扣";
+            case RECON_ACTION_FIX_PLATFORM:
+                return "平台账户冲正";
+            default:
+                return "仅记录";
         }
     }
 

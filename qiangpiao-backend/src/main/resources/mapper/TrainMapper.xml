@@ -149,6 +149,29 @@
         SELECT COUNT(1) FROM t_train WHERE status = 1
     </select>
 
+    <!-- 库存对账专用：只扫「还能买」的班次。
+         已发车的历史班次余票不再变动，对账它们只会白扫几千行。 -->
+    <select id="selectNotDeparted" resultType="com.qiangpiao.dataobject.TrainDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_train
+        WHERE status = 1
+        AND (
+        <include refid="Not_Departed_Condition"/>
+        )
+        ORDER BY depart_date, depart_time
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countNotDeparted" resultType="long">
+        SELECT COUNT(1)
+        FROM t_train
+        WHERE status = 1
+        AND (
+        <include refid="Not_Departed_Condition"/>
+        )
+    </select>
+
     <!--
       车次日期滚动（每天发车）：把已发车的车次挪到它的下一班次——
       今天该时刻还没过就保持在今天，否则顺延到明天，保证任何时刻都能查到未发车的车次。

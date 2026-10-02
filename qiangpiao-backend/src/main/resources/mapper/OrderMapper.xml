@@ -132,4 +132,22 @@
         ORDER BY o.depart_date
         LIMIT 5
     </select>
+
+    <!--
+      资金对账：时间窗口内状态变更为「已支付 / 已退票」的订单。
+      按 update_time 扫而不是 create_time——对账只关心最近发生的资金动作，
+      历史订单每轮都扫一遍纯属浪费（它们的账早就对过且不会再变）。
+    -->
+    <select id="selectReconOrders" resultType="com.qiangpiao.dataobject.OrderDO">
+        SELECT
+        <include refid="Base_Column_List"/>
+        FROM t_order
+        WHERE status IN
+        <foreach collection="statuses" item="s" open="(" separator="," close=")">
+            #{s}
+        </foreach>
+        AND update_time &gt;= #{from}
+        AND update_time &lt; #{to}
+        ORDER BY update_time
+    </select>
 </mapper>

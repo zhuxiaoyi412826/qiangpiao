@@ -67,6 +67,16 @@
         WHERE id = #{id}
     </update>
 
+    <!-- 库存对账专用：只改余票。与 updateById 分开，避免对账时把总座位数 / 票价一起写回去 -->
+    <update id="updateAvailableCount">
+        UPDATE t_train_stock
+        SET available_count = #{availableCount},
+            version = version + 1
+        WHERE train_id = #{trainId}
+          AND seat_type = #{seatType}
+          AND available_count &lt;&gt; #{availableCount}
+    </update>
+
     <insert id="insert" parameterType="com.qiangpiao.dataobject.TrainStockDO"
             useGeneratedKeys="true" keyProperty="id">
         INSERT INTO t_train_stock (train_id, seat_type, total_count, available_count, price, version, create_time,
